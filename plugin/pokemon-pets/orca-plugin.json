@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 1,
+  "id": "pokemon-pets",
+  "publisher": "luthfi",
+  "name": "Pokémon Pets",
+  "version": "1.0.0",
+  "description": "Pokémon berjalan-jalan di panel sidebar Orca. Klik untuk menyapa; malam hari mereka tidur.",
+  "author": {
+    "name": "Luthfi"
+  },
+  "engines": {
+    "orca": ">=1.4.0"
+  },
+  "pluginApi": 1,
+  "contributes": {
+    "panels": [
+      {
+        "id": "pets",
+        "title": "Pokémon",
+        "icon": "paw-print",
+        "entry": "panel.html"
+      }
+    ]
+  }
+}

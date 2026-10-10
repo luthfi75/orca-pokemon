@@ -1,0 +1,25 @@
+name: "Pokémon Blastoise"
+accent: "#5aa9e6"
+cursor: "#5aa9e6"
+background: "#121b26"
+foreground: "#dce8f2"
+details: darker
+terminal_colors:
+  normal:
+    black: "#1e2a38"
+    red: "#ef6f6c"
+    green: "#7cc99a"
+    yellow: "#e8c872"
+    blue: "#5aa9e6"
+    magenta: "#b48ee0"
+    cyan: "#56c7d4"
+    white: "#c4d3e0"
+  bright:
+    black: "#677c93"
+    red: "#ff928f"
+    green: "#9ee3b7"
+    yellow: "#f5dc94"
+    blue: "#84c4f5"
+    magenta: "#ceabf5"
+    cyan: "#7fdfe9"
+    white: "#f2f8fc"

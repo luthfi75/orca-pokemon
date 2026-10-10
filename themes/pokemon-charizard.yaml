@@ -1,0 +1,25 @@
+name: "Pokémon Charizard"
+accent: "#f08030"
+cursor: "#f08030"
+background: "#1f1612"
+foreground: "#f5e4d4"
+details: darker
+terminal_colors:
+  normal:
+    black: "#2e211b"
+    red: "#e85a3c"
+    green: "#9cc46a"
+    yellow: "#f2b84b"
+    blue: "#4fa3b8"
+    magenta: "#d9849b"
+    cyan: "#5fbfb0"
+    white: "#dccbb9"
+  bright:
+    black: "#877061"
+    red: "#ff7f5c"
+    green: "#b9dc88"
+    yellow: "#ffd36b"
+    blue: "#74c2d6"
+    magenta: "#f0a3b8"
+    cyan: "#84d9cb"
+    white: "#fff6ec"

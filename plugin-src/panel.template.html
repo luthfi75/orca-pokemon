@@ -1,0 +1,434 @@
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Geist", system-ui, sans-serif;
+    user-select: none;
+  }
+  .bar {
+    position: absolute; inset: 0 0 auto 0; height: 36px; box-sizing: border-box;
+    display: flex; align-items: center; gap: 6px; padding: 0 8px;
+    border-bottom: 1px solid var(--border); background: var(--background);
+  }
+  .title { font-weight: 600; white-space: nowrap; }
+  .count { color: var(--muted-foreground); font-weight: 400; margin-left: 4px; }
+  select, button {
+    font: inherit; color: var(--foreground); background: var(--secondary, var(--muted));
+    border: 1px solid var(--border); border-radius: 6px; height: 24px; padding: 0 8px;
+  }
+  select { flex: 1 1 auto; min-width: 0; max-width: 140px; margin-left: auto; }
+  .icon { width: 24px; padding: 0; flex: none; font-size: 14px; line-height: 1; }
+  button { cursor: pointer; transition: background-color .15s ease; }
+  button:hover, select:hover { background: var(--accent); }
+  .info { color: var(--muted-foreground); font-size: 12px; }
+  #c { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; image-rendering: pixelated; cursor: default; }
+</style>
+
+<div class="bar">
+  <span class="title">Pokémon<span class="count" id="count"></span></span>
+  <select id="pick" aria-label="Pilih Pokémon"></select>
+  <button id="add" class="icon" title="Tambah Pokémon yang dipilih" aria-label="Tambah">+</button>
+  <button id="reset" class="icon" title="Kembalikan rombongan awal" aria-label="Reset">↺</button>
+  <button class="icon info" title="Klik Pokémon untuk menyapa. Malam hari mereka tidur.&#10;Sprite: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
+</div>
+<canvas id="c"></canvas>
+
+<script>
+'use strict'
+const DATA = /*__SPRITES__*/null
+
+const SCALE = 2 // pixel-art scale in CSS px
+const MAX_PETS = 10
+const FPS = 30
+const ROW = { down: 0, downRight: 1, right: 2, upRight: 3, up: 4, upLeft: 5, left: 6, downLeft: 7 }
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+
+const canvas = document.getElementById('c')
+const ctx = canvas.getContext('2d')
+const mons = {}
+let pets = []
+let W = 0, H = 0, groundTop = 0, dpr = 1
+let bg = null, bgPhase = ''
+
+const rand = (a, b) => a + Math.random() * (b - a)
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)]
+const css = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+let TOK = {}
+function readTokens () {
+  TOK = {
+    muted: css('--muted-foreground', '#a1a1aa'),
+    popover: css('--popover', '#18181b'),
+    popoverFg: css('--popover-foreground', '#fafafa'),
+    border: css('--border', '#3f3f46')
+  }
+}
+
+function loadImage (src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
+  })
+}
+
+// Distance from the frame centre to the lowest opaque pixel: PMD frames share one centre
+// across animations, so this puts every animation's feet on the same ground line.
+function feetOffset (anim) {
+  try {
+    const oc = document.createElement('canvas')
+    oc.width = anim.fw
+    oc.height = anim.fh
+    const o = oc.getContext('2d')
+    o.drawImage(anim.img, 0, Math.min(ROW.right, anim.rows - 1) * anim.fh, anim.fw, anim.fh, 0, 0, anim.fw, anim.fh)
+    const d = o.getImageData(0, 0, anim.fw, anim.fh).data
+    for (let y = anim.fh - 1; y >= 0; y--) {
+      for (let x = 0; x < anim.fw; x++) if (d[(y * anim.fw + x) * 4 + 3] > 0) return y + 1 - anim.fh / 2
+    }
+  } catch (_) {}
+  return anim.fh / 2 - 4
+}
+
+function frameAt (anim, ms) {
+  let tick = (ms * 60 / 1000) % anim.total
+  for (let i = 0; i < anim.dur.length; i++) {
+    if (tick < anim.dur[i]) return i
+    tick -= anim.dur[i]
+  }
+  return 0
+}
+
+function phaseNow () {
+  const h = new Date().getHours()
+  if (h >= 21 || h < 5) return 'night'
+  if (h >= 17 || h < 7) return 'dusk'
+  return 'day'
+}
+
+class Pet {
+  constructor (mon, x, y) {
+    this.mon = mon
+    this.x = x
+    this.y = y
+    this.dir = Math.random() < 0.5 ? -1 : 1
+    this.vx = 0
+    this.vy = 0
+    this.bubble = 0
+    this.setState(reduceMotion ? 'idle' : pick(['walk', 'idle']))
+  }
+
+  setState (state) {
+    this.state = state
+    this.t = 0
+    this.facingFront = state === 'idle' && Math.random() < 0.35
+    const night = phaseNow() === 'night'
+    if (state === 'walk') {
+      const speed = rand(18, 34)
+      this.dir = Math.random() < 0.7 ? this.dir : -this.dir
+      this.vx = this.dir * speed
+      this.vy = Math.random() < 0.35 ? rand(-12, 12) : 0
+      this.until = rand(2500, 6500)
+    } else if (state === 'sleep') {
+      this.vx = this.vy = 0
+      this.until = night ? rand(40000, 120000) : rand(8000, 20000)
+    } else if (state === 'hop') {
+      this.vx = this.vy = 0
+      const hop = this.mon.anims.hop
+      this.until = hop ? (hop.total * 1000 / 60) * 2 : 600
+    } else {
+      this.vx = this.vy = 0
+      this.until = rand(1800, 5000)
+    }
+  }
+
+  next () {
+    if (reduceMotion) return this.setState('idle')
+    const night = phaseNow() === 'night'
+    const sleepy = this.mon.key === 'snorlax' ? 0.5 : night ? 0.6 : 0.08
+    if (this.state === 'walk') return this.setState(Math.random() < 0.7 ? 'idle' : 'walk')
+    const r = Math.random()
+    if (r < sleepy) return this.setState('sleep')
+    this.setState(r < sleepy + 0.65 ? 'walk' : 'idle')
+  }
+
+  update (dt) {
+    this.t += dt
+    if (this.bubble > 0) this.bubble -= dt
+    if (this.state === 'walk') {
+      this.x += this.vx * dt / 1000
+      this.y += this.vy * dt / 1000
+      const margin = 24
+      if (this.x < margin) { this.x = margin; this.vx = Math.abs(this.vx); this.dir = 1 }
+      if (this.x > W - margin) { this.x = W - margin; this.vx = -Math.abs(this.vx); this.dir = -1 }
+      const top = groundTop + 30, bottom = H - 12
+      if (this.y < top) { this.y = top; this.vy = Math.abs(this.vy) }
+      if (this.y > bottom) { this.y = bottom; this.vy = -Math.abs(this.vy) }
+    }
+    if (this.t > this.until) this.next()
+  }
+
+  anim () {
+    const a = this.mon.anims
+    if (this.state === 'walk') return a.walk
+    if (this.state === 'sleep') return a.sleep || a.idle
+    if (this.state === 'hop') return a.hop || a.idle
+    return a.idle
+  }
+
+  row (anim) {
+    let row
+    if (this.state === 'walk' && Math.abs(this.vy) > Math.abs(this.vx) * 0.6) {
+      row = this.vy > 0 ? (this.dir > 0 ? ROW.downRight : ROW.downLeft) : (this.dir > 0 ? ROW.upRight : ROW.upLeft)
+    } else if (this.state === 'hop' || (this.state === 'idle' && this.facingFront)) {
+      row = ROW.down
+    } else {
+      row = this.dir > 0 ? ROW.right : ROW.left
+    }
+    return Math.min(row, anim.rows - 1)
+  }
+
+  rect () {
+    const a = this.mon.anims.walk
+    const cy = this.y - this.mon.feet * SCALE
+    return { x: this.x - (a.fw / 2) * SCALE, y: cy - (a.fh / 2) * SCALE, w: a.fw * SCALE, h: a.fh * SCALE }
+  }
+
+  draw (now) {
+    const anim = this.anim()
+    const frame = reduceMotion ? 0 : frameAt(anim, this.state === 'hop' ? this.t : now + this.mon.phase)
+    const row = this.row(anim)
+    const cy = this.y - this.mon.feet * SCALE
+    // ground shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'
+    ctx.beginPath()
+    ctx.ellipse(this.x, this.y - 1, 9 * SCALE * this.mon.shadow, 3 * SCALE, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.drawImage(
+      anim.img, frame * anim.fw, row * anim.fh, anim.fw, anim.fh,
+      Math.round(this.x - (anim.fw / 2) * SCALE), Math.round(cy - (anim.fh / 2) * SCALE),
+      anim.fw * SCALE, anim.fh * SCALE
+    )
+    if (this.state === 'sleep') drawZzz(this.x + 10, this.rect().y + 8, now)
+    if (this.bubble > 0) drawBubble(this.mon.name, this.x, Math.min(this.rect().y, cy - (anim.fh / 2) * SCALE + 6) - 4)
+  }
+}
+
+function drawZzz (x, y, now) {
+  const t = (now / 900) % 3
+  ctx.fillStyle = TOK.muted
+  ctx.font = '600 10px -apple-system, system-ui, sans-serif'
+  for (let i = 0; i < 3; i++) {
+    const k = (t + i) % 3
+    ctx.globalAlpha = Math.max(0, 1 - k / 3)
+    ctx.fillText('z', x + k * 5, y - k * 7)
+  }
+  ctx.globalAlpha = 1
+}
+
+function drawBubble (text, x, y) {
+  ctx.font = '600 11px -apple-system, system-ui, sans-serif'
+  const w = ctx.measureText(text).width + 14, h = 20
+  const bx = Math.max(4, Math.min(W - w - 4, x - w / 2)), by = Math.max(4, y - h)
+  ctx.fillStyle = TOK.popover
+  ctx.strokeStyle = TOK.border
+  ctx.beginPath()
+  ctx.roundRect(bx, by, w, h, 8)
+  ctx.fill()
+  ctx.stroke()
+  ctx.fillStyle = TOK.popoverFg
+  ctx.fillText(text, bx + 7, by + 14)
+}
+
+// ---------- scenery (cached, redrawn on resize or when the time of day changes) ----------
+const SKY = {
+  day: ['#36567a', '#7fa7c4'],
+  dusk: ['#2d2a4f', '#c9805e'],
+  night: ['#0b1222', '#1d2945']
+}
+
+function seeded (seed) {
+  return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646 }
+}
+
+function buildBackground (phase) {
+  const off = document.createElement('canvas')
+  off.width = Math.max(1, Math.round(W * dpr))
+  off.height = Math.max(1, Math.round(H * dpr))
+  const g = off.getContext('2d')
+  g.scale(dpr, dpr)
+  const r = seeded(7)
+  const [top, bottom] = SKY[phase]
+  const sky = g.createLinearGradient(0, 0, 0, groundTop)
+  sky.addColorStop(0, top)
+  sky.addColorStop(1, bottom)
+  g.fillStyle = sky
+  g.fillRect(0, 0, W, groundTop + 2)
+
+  if (phase === 'night') {
+    for (let i = 0; i < Math.round(W * groundTop / 900); i++) {
+      g.fillStyle = `rgba(255,255,240,${0.35 + r() * 0.5})`
+      const s = r() < 0.15 ? 2 : 1
+      g.fillRect(Math.round(r() * W), Math.round(r() * (groundTop - 30)), s, s)
+    }
+    g.fillStyle = '#f3ecd2'
+    g.beginPath(); g.arc(W - 42, 34, 12, 0, Math.PI * 2); g.fill()
+    g.fillStyle = top
+    g.beginPath(); g.arc(W - 36, 30, 11, 0, Math.PI * 2); g.fill()
+  } else {
+    g.fillStyle = phase === 'day' ? 'rgba(255,240,180,0.9)' : 'rgba(255,190,120,0.9)'
+    g.beginPath(); g.arc(W - 46, phase === 'day' ? 36 : groundTop - 18, 13, 0, Math.PI * 2); g.fill()
+  }
+
+  // far hills
+  const hill = (color, base, amp, freq, shift) => {
+    g.fillStyle = color
+    g.beginPath()
+    g.moveTo(0, groundTop + 2)
+    for (let x = 0; x <= W; x += 4) g.lineTo(x, base - amp * (0.5 + 0.5 * Math.sin(x / freq + shift)))
+    g.lineTo(W, groundTop + 2)
+    g.closePath()
+    g.fill()
+  }
+  const dark = phase === 'night'
+  hill(dark ? '#16302a' : '#3e6e4a', groundTop + 2, 26, 46, 1.3)
+  hill(dark ? '#1b3a2b' : '#4d8a4f', groundTop + 2, 14, 31, 4.1)
+
+  // grass field
+  const grass = g.createLinearGradient(0, groundTop, 0, H)
+  grass.addColorStop(0, dark ? '#24472e' : '#5d9e4f')
+  grass.addColorStop(1, dark ? '#152a1c' : '#3e7a3c')
+  g.fillStyle = grass
+  g.fillRect(0, groundTop, W, H - groundTop)
+  g.fillStyle = dark ? '#2f5a3a' : '#79b863'
+  g.fillRect(0, groundTop, W, 3)
+
+  // tufts + a few flowers
+  for (let i = 0; i < Math.round(W * (H - groundTop) / 260); i++) {
+    const x = Math.round(r() * W), y = Math.round(groundTop + 8 + r() * (H - groundTop - 10))
+    g.fillStyle = dark ? 'rgba(80,140,90,0.45)' : 'rgba(40,90,40,0.45)'
+    g.fillRect(x, y, 2, 4); g.fillRect(x + 3, y + 1, 2, 3); g.fillRect(x - 3, y + 2, 2, 2)
+    if (r() < 0.12) {
+      g.fillStyle = pick(dark ? ['#8f86b8', '#b5a77a'] : ['#f7d02c', '#f08c9c', '#f3ecd2'])
+      g.fillRect(x + 7, y - 2, 3, 3)
+    }
+  }
+  return off
+}
+
+const clouds = Array.from({ length: 3 }, (_, i) => ({ x: Math.random() * 400, y: 18 + i * 22, s: rand(4, 9), w: rand(36, 60) }))
+function drawClouds (dt) {
+  if (bgPhase === 'night') return
+  ctx.fillStyle = bgPhase === 'day' ? 'rgba(255,255,255,0.55)' : 'rgba(255,220,200,0.35)'
+  for (const c of clouds) {
+    if (!reduceMotion) c.x += c.s * dt / 1000
+    if (c.x > W + c.w) c.x = -c.w
+    const y = Math.min(c.y, groundTop - 40)
+    ctx.fillRect(Math.round(c.x), y, c.w, 6)
+    ctx.fillRect(Math.round(c.x + c.w * 0.2), y - 5, c.w * 0.45, 5)
+  }
+}
+
+// ---------- layout + loop ----------
+function resize () {
+  dpr = window.devicePixelRatio || 1
+  readTokens()
+  W = canvas.clientWidth
+  H = canvas.clientHeight
+  canvas.width = Math.round(W * dpr)
+  canvas.height = Math.round(H * dpr)
+  groundTop = Math.round(H - Math.max(110, H * 0.45))
+  bgPhase = phaseNow()
+  bg = buildBackground(bgPhase)
+  for (const p of pets) {
+    p.x = Math.min(Math.max(p.x, 24), Math.max(24, W - 24))
+    p.y = Math.min(Math.max(p.y, groundTop + 30), H - 12)
+  }
+}
+
+function spawn (key) {
+  if (!mons[key]) return
+  if (pets.length >= MAX_PETS) pets.shift()
+  const p = new Pet(mons[key], rand(30, Math.max(31, W - 30)), rand(groundTop + 34, H - 14))
+  pets.push(p)
+  updateCount()
+  return p
+}
+
+function updateCount () {
+  document.getElementById('count').textContent = `· ${pets.length}`
+}
+
+function defaultParty () {
+  pets = []
+  const others = Object.keys(mons).filter((k) => k !== 'pikachu').sort(() => Math.random() - 0.5)
+  for (const key of ['pikachu', ...others.slice(0, 3)]) spawn(key)
+}
+
+let last = performance.now(), acc = 0
+function loop (now) {
+  requestAnimationFrame(loop)
+  if (document.hidden) { last = now; return }
+  const dt = Math.min(100, now - last)
+  acc += dt
+  last = now
+  if (acc < 1000 / FPS) return
+  const step = acc
+  acc = 0
+  if (phaseNow() !== bgPhase) { bgPhase = phaseNow(); bg = buildBackground(bgPhase) }
+  for (const p of pets) p.update(step)
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  if (bg) ctx.drawImage(bg, 0, 0)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.imageSmoothingEnabled = false
+  drawClouds(step)
+  for (const p of [...pets].sort((a, b) => a.y - b.y)) p.draw(now)
+}
+
+canvas.addEventListener('click', (e) => {
+  const r = canvas.getBoundingClientRect()
+  const x = e.clientX - r.left, y = e.clientY - r.top
+  const hit = [...pets].sort((a, b) => b.y - a.y).find((p) => {
+    const b = p.rect()
+    return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
+  })
+  if (!hit) return
+  hit.bubble = 1800
+  hit.setState(reduceMotion ? 'idle' : 'hop')
+})
+canvas.addEventListener('mousemove', (e) => {
+  const r = canvas.getBoundingClientRect()
+  const x = e.clientX - r.left, y = e.clientY - r.top
+  canvas.style.cursor = pets.some((p) => { const b = p.rect(); return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h }) ? 'pointer' : 'default'
+})
+
+async function init () {
+  const select = document.getElementById('pick')
+  for (const [key, m] of Object.entries(DATA.mons)) {
+    const anims = {}
+    for (const [name, a] of Object.entries(m.anims)) {
+      const img = await loadImage(a.src)
+      anims[name] = {
+        img, fw: a.fw, fh: a.fh, dur: a.dur,
+        rows: Math.max(1, Math.round(img.height / a.fh)),
+        total: a.dur.reduce((s, d) => s + d, 0)
+      }
+    }
+    mons[key] = { key, name: m.name, anims, feet: feetOffset(anims.walk), shadow: m.shadow, phase: Math.random() * 5000 }
+    const opt = document.createElement('option')
+    opt.value = key
+    opt.textContent = m.name
+    select.appendChild(opt)
+  }
+  select.value = 'pikachu'
+  resize()
+  defaultParty()
+  document.getElementById('add').addEventListener('click', () => spawn(select.value))
+  document.getElementById('reset').addEventListener('click', defaultParty)
+  new ResizeObserver(resize).observe(canvas)
+  requestAnimationFrame(loop)
+}
+
+init()
+</script>

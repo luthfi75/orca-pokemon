@@ -1,0 +1,25 @@
+name: "Pokémon Gengar"
+accent: "#b07fe0"
+cursor: "#b07fe0"
+background: "#1a1524"
+foreground: "#e6dcf5"
+details: darker
+terminal_colors:
+  normal:
+    black: "#2a2238"
+    red: "#ff4d6d"
+    green: "#7fd1a0"
+    yellow: "#f2c46d"
+    blue: "#8a9cf0"
+    magenta: "#b07fe0"
+    cyan: "#7ac8e0"
+    white: "#cfc4e2"
+  bright:
+    black: "#7d6e9a"
+    red: "#ff7a91"
+    green: "#a0e6bb"
+    yellow: "#ffd98f"
+    blue: "#aab8ff"
+    magenta: "#cfa2ff"
+    cyan: "#9ee0f2"
+    white: "#f7f2ff"

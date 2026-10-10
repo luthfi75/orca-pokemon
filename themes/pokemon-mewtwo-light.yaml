@@ -1,0 +1,25 @@
+name: "Pokémon Mewtwo Light"
+accent: "#7c4aa6"
+cursor: "#7c4aa6"
+background: "#f6f3f8"
+foreground: "#2e2638"
+details: lighter
+terminal_colors:
+  normal:
+    black: "#2e2638"
+    red: "#b8324a"
+    green: "#2f7d4f"
+    yellow: "#8a6a00"
+    blue: "#2f62b0"
+    magenta: "#8e3fa8"
+    cyan: "#1f7a86"
+    white: "#a59bb0"
+  bright:
+    black: "#6e6480"
+    red: "#c23d56"
+    green: "#2a7a4c"
+    yellow: "#856700"
+    blue: "#3a6fc0"
+    magenta: "#9a4cb5"
+    cyan: "#1a7681"
+    white: "#d9d2e0"

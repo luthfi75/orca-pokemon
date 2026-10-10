@@ -1,0 +1,25 @@
+name: "Pokémon Pikachu"
+accent: "#f7d02c"
+cursor: "#f7d02c"
+background: "#1c1a14"
+foreground: "#f3ecd2"
+details: darker
+terminal_colors:
+  normal:
+    black: "#2b2820"
+    red: "#e8534a"
+    green: "#a3c95a"
+    yellow: "#f7d02c"
+    blue: "#6ea8d8"
+    magenta: "#d98aa8"
+    cyan: "#6cc3b5"
+    white: "#d9d0b4"
+  bright:
+    black: "#7d765f"
+    red: "#ff7a6e"
+    green: "#bfe07a"
+    yellow: "#ffe066"
+    blue: "#93c2ec"
+    magenta: "#f0a8c4"
+    cyan: "#8fdccf"
+    white: "#fffaf0"

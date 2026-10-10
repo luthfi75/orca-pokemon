@@ -1,0 +1,25 @@
+name: "Pokémon Venusaur"
+accent: "#78c850"
+cursor: "#78c850"
+background: "#131c19"
+foreground: "#dcebe2"
+details: darker
+terminal_colors:
+  normal:
+    black: "#1f2b27"
+    red: "#e8667a"
+    green: "#78c850"
+    yellow: "#e3c565"
+    blue: "#6aa7d6"
+    magenta: "#f08c9c"
+    cyan: "#5fb3a1"
+    white: "#c3d6cb"
+  bright:
+    black: "#6a8178"
+    red: "#ff8a9b"
+    green: "#9be070"
+    yellow: "#f2da8a"
+    blue: "#8fc2ea"
+    magenta: "#ffadba"
+    cyan: "#84d0c0"
+    white: "#f1faf5"
