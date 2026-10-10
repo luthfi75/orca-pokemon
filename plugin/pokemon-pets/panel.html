@@ -22,6 +22,9 @@
   button { cursor: pointer; transition: background-color .15s ease; }
   button:hover, select:hover { background: var(--accent); }
   .info { color: var(--muted-foreground); font-size: 12px; }
+  .icon svg { width: 14px; height: 14px; display: block; margin: auto; }
+  /* sky forced to a fixed time: framed, so it's clear it isn't following the clock */
+  .icon.forced { border-color: var(--muted-foreground); }
   #c { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; image-rendering: pixelated; cursor: default; }
 </style>
 
@@ -30,7 +33,8 @@
   <select id="pick" aria-label="Pilih Pokémon"></select>
   <button id="add" class="icon" title="Tambah Pokémon yang dipilih" aria-label="Tambah">+</button>
   <button id="reset" class="icon" title="Kembalikan rombongan awal" aria-label="Reset">↺</button>
-  <button class="icon info" title="Klik Pokémon untuk menyapa. Malam hari mereka tidur.&#10;Sprite: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
+  <button id="sky" class="icon" aria-label="Langit"></button>
+  <button class="icon info" title="Klik Pokémon untuk menyapa. Malam hari mereka tidur.&#10;Tombol langit: otomatis ikut jam, atau paksa siang / senja / malam.&#10;Sprite: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
 </div>
 <canvas id="c"></canvas>
 
@@ -50,6 +54,8 @@ const mons = {}
 let pets = []
 let W = 0, H = 0, groundTop = 0, dpr = 1
 let bg = null, bgPhase = ''
+let prevBg = null, fadeStart = 0 // previous sky, crossfaded out after a phase change
+const SKY_FADE_MS = 700
 
 const rand = (a, b) => a + Math.random() * (b - a)
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)]
@@ -99,11 +105,45 @@ function frameAt (anim, ms) {
   return 0
 }
 
-function phaseNow () {
+// Sky: follows the clock ('auto') or is forced to a time of day by the sky
+// button. Not persisted — panels can't use storage — so it opens on 'auto'.
+const SKY_MODES = ['auto', 'day', 'dusk', 'night']
+const SKY_LABEL = { auto: 'Langit: otomatis (ikut jam)', day: 'Langit: siang', dusk: 'Langit: senja', night: 'Langit: malam' }
+const SKY_ICON = {
+  auto: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" stroke="none"/></svg>',
+  day: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>',
+  dusk: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 12h13M4.8 12a3.2 3.2 0 0 1 6.4 0M8 4.5v1.5M3.3 6.6l1 1M12.7 6.6l-1 1"/></svg>',
+  night: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M13.2 10.2A5.6 5.6 0 0 1 5.8 2.8a5.6 5.6 0 1 0 7.4 7.4z"/></svg>'
+}
+let skyMode = 'auto'
+
+function clockPhase () {
   const h = new Date().getHours()
   if (h >= 21 || h < 5) return 'night'
   if (h >= 17 || h < 7) return 'dusk'
   return 'day'
+}
+
+function phaseNow () {
+  return skyMode === 'auto' ? clockPhase() : skyMode
+}
+
+// Pokémon react to a forced change right away: nightfall makes them drowsy
+// soon, daylight wakes the sleepers (Snorlax keeps napping).
+function applySky () {
+  const night = phaseNow() === 'night'
+  for (const p of pets) {
+    if (night && p.state !== 'sleep') p.until = Math.min(p.until, p.t + rand(300, 2500))
+    else if (!night && p.state === 'sleep' && p.mon.key !== 'snorlax') p.setState(Math.random() < 0.5 ? 'idle' : 'walk')
+  }
+}
+
+function renderSkyButton () {
+  const btn = document.getElementById('sky')
+  btn.innerHTML = SKY_ICON[skyMode]
+  btn.title = `${SKY_LABEL[skyMode]} — klik untuk ganti`
+  btn.setAttribute('aria-label', SKY_LABEL[skyMode])
+  btn.classList.toggle('forced', skyMode !== 'auto')
 }
 
 class Pet {
@@ -340,6 +380,7 @@ function resize () {
   groundTop = Math.round(H - Math.max(110, H * 0.45))
   bgPhase = phaseNow()
   bg = buildBackground(bgPhase)
+  prevBg = null // a resize redraws the sky at the new size; nothing to fade from
   for (const p of pets) {
     p.x = Math.min(Math.max(p.x, 24), Math.max(24, W - 24))
     p.y = Math.min(Math.max(p.y, groundTop + 30), H - 12)
@@ -375,11 +416,21 @@ function loop (now) {
   if (acc < 1000 / FPS) return
   const step = acc
   acc = 0
-  if (phaseNow() !== bgPhase) { bgPhase = phaseNow(); bg = buildBackground(bgPhase) }
+  if (phaseNow() !== bgPhase) {
+    prevBg = bg
+    fadeStart = now
+    bgPhase = phaseNow()
+    bg = buildBackground(bgPhase)
+  }
   for (const p of pets) p.update(step)
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const fade = prevBg ? Math.min(1, (now - fadeStart) / SKY_FADE_MS) : 1
+  if (fade < 1) ctx.drawImage(prevBg, 0, 0)
+  else prevBg = null
+  ctx.globalAlpha = fade
   if (bg) ctx.drawImage(bg, 0, 0)
+  ctx.globalAlpha = 1
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.imageSmoothingEnabled = false
   drawClouds(step)
@@ -426,6 +477,12 @@ async function init () {
   defaultParty()
   document.getElementById('add').addEventListener('click', () => spawn(select.value))
   document.getElementById('reset').addEventListener('click', defaultParty)
+  renderSkyButton()
+  document.getElementById('sky').addEventListener('click', () => {
+    skyMode = SKY_MODES[(SKY_MODES.indexOf(skyMode) + 1) % SKY_MODES.length]
+    renderSkyButton()
+    applySky()
+  })
   new ResizeObserver(resize).observe(canvas)
   requestAnimationFrame(loop)
 }

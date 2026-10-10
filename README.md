@@ -10,6 +10,7 @@ A Pokémon pack for [Orca](https://github.com/stablyai/orca): a **Pokémon Pets*
 
 - 12 Pokémon with real walk, idle, sleep and hop animations (Pikachu, Bulbasaur, Charmander, Squirtle, Eevee, Gengar, Jigglypuff, Meowth, Psyduck, Snorlax, Mew, Togepi).
 - They stroll, stop, look around, and doze off — at night the sky turns dark, stars come out and most of them fall asleep (Snorlax mostly sleeps anyway).
+- The sky follows your clock (day, dusk, night), or force one with the sky button — it cycles Auto → Day → Dusk → Night, and the Pokémon react right away.
 - Click a Pokémon to make it hop and show its name. Add more with **+** (up to 10), reset with **↺**.
 - Lightweight: a single sandboxed HTML document, capped at 30 fps, paused while hidden; respects `prefers-reduced-motion`.
 
