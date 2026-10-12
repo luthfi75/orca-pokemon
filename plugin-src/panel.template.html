@@ -34,7 +34,7 @@
   <button id="add" class="icon" title="Tambah Pokémon yang dipilih" aria-label="Tambah">+</button>
   <button id="reset" class="icon" title="Kembalikan rombongan awal" aria-label="Reset">↺</button>
   <button id="sky" class="icon" aria-label="Langit"></button>
-  <button class="icon info" title="Klik Pokémon untuk menyapa. Malam hari mereka tidur.&#10;Tombol langit: otomatis ikut jam, atau paksa siang / senja / malam.&#10;Sprite: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
+  <button class="icon info" title="Klik Pokémon untuk menyapa. Malam hari mereka tidur.&#10;Sesekali siapa pun yang di padang ikut kerja dengan alatnya sendiri: PC kecil (coding), Pokédex (riset), mesin Pokémon Center (test), landasan (build), surat (deploy).&#10;Tombol langit: otomatis ikut jam, atau paksa siang / senja / malam.&#10;Sprite: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
 </div>
 <canvas id="c"></canvas>
 
@@ -155,6 +155,8 @@ class Pet {
     this.vx = 0
     this.vy = 0
     this.bubble = 0
+    this.say = '' // bubble text; empty shows the Pokémon's name
+    this.job = null // see "work" below
     this.setState(reduceMotion ? 'idle' : pick(['walk', 'idle']))
   }
 
@@ -163,7 +165,12 @@ class Pet {
     this.t = 0
     this.facingFront = state === 'idle' && Math.random() < 0.35
     const night = phaseNow() === 'night'
-    if (state === 'walk') {
+    if (state === 'goto') {
+      this.until = 15000 // give up if the spot is somehow unreachable
+    } else if (state === 'work') {
+      this.vx = this.vy = 0
+      this.until = rand(...this.job.dur)
+    } else if (state === 'walk') {
       const speed = rand(18, 34)
       this.dir = Math.random() < 0.7 ? this.dir : -this.dir
       this.vx = this.dir * speed
@@ -183,6 +190,7 @@ class Pet {
   }
 
   next () {
+    if (this.job) return this.state === 'work' ? finishJob(this) : dropJob(this)
     if (reduceMotion) return this.setState('idle')
     const night = phaseNow() === 'night'
     const sleepy = this.mon.key === 'snorlax' ? 0.5 : night ? 0.6 : 0.08
@@ -195,6 +203,23 @@ class Pet {
   update (dt) {
     this.t += dt
     if (this.bubble > 0) this.bubble -= dt
+    else this.say = ''
+    if (this.state === 'goto') {
+      const spot = this.job.spot
+      const dx = spot.x - this.x, dy = spot.y - this.y, d = Math.hypot(dx, dy)
+      if (d < 2) {
+        this.x = spot.x
+        this.y = spot.y
+        startWork(this)
+      } else {
+        const k = Math.min(1, (44 * dt / 1000) / d)
+        this.x += dx * k
+        this.y += dy * k
+        this.vx = dx
+        this.vy = dy
+        this.dir = dx >= 0 ? 1 : -1
+      }
+    }
     if (this.state === 'walk') {
       this.x += this.vx * dt / 1000
       this.y += this.vy * dt / 1000
@@ -210,15 +235,16 @@ class Pet {
 
   anim () {
     const a = this.mon.anims
-    if (this.state === 'walk') return a.walk
+    if (this.state === 'walk' || this.state === 'goto') return a.walk
     if (this.state === 'sleep') return a.sleep || a.idle
     if (this.state === 'hop') return a.hop || a.idle
-    return a.idle
+    return a.idle // workers stay in their idle pose facing the kit; the kit shows the action
   }
 
   row (anim) {
     let row
-    if (this.state === 'walk' && Math.abs(this.vy) > Math.abs(this.vx) * 0.6) {
+    const moving = this.state === 'walk' || this.state === 'goto'
+    if (moving && Math.abs(this.vy) > Math.abs(this.vx) * 0.6) {
       row = this.vy > 0 ? (this.dir > 0 ? ROW.downRight : ROW.downLeft) : (this.dir > 0 ? ROW.upRight : ROW.upLeft)
     } else if (this.state === 'hop' || (this.state === 'idle' && this.facingFront)) {
       row = ROW.down
@@ -238,7 +264,13 @@ class Pet {
     const anim = this.anim()
     const frame = reduceMotion ? 0 : frameAt(anim, this.state === 'hop' ? this.t : now + this.mon.phase)
     const row = this.row(anim)
-    const cy = this.y - this.mon.feet * SCALE
+    // small work motions: a 1px bob while typing, a lean into each hammer blow
+    let bob = 0, lean = 0
+    if (this.state === 'work') {
+      if (this.job.type === 'dev') bob = Math.floor(now / 170) % 2
+      else if (this.job.type === 'build' && now - (this.lastSpark || 0) < 140) lean = this.dir * 3
+    }
+    const cy = this.y - this.mon.feet * SCALE - bob
     // ground shadow
     ctx.fillStyle = 'rgba(0,0,0,0.22)'
     ctx.beginPath()
@@ -246,11 +278,12 @@ class Pet {
     ctx.fill()
     ctx.drawImage(
       anim.img, frame * anim.fw, row * anim.fh, anim.fw, anim.fh,
-      Math.round(this.x - (anim.fw / 2) * SCALE), Math.round(cy - (anim.fh / 2) * SCALE),
+      Math.round(this.x + lean - (anim.fw / 2) * SCALE), Math.round(cy - (anim.fh / 2) * SCALE),
       anim.fw * SCALE, anim.fh * SCALE
     )
     if (this.state === 'sleep') drawZzz(this.x + 10, this.rect().y + 8, now)
-    if (this.bubble > 0) drawBubble(this.mon.name, this.x, Math.min(this.rect().y, cy - (anim.fh / 2) * SCALE + 6) - 4)
+    if (this.job) drawJobProps(this, now)
+    if (this.bubble > 0) drawBubble(this.say || this.mon.name, this.x, Math.min(this.rect().y, cy - (anim.fh / 2) * SCALE + 6) - 4)
   }
 }
 
@@ -278,6 +311,247 @@ function drawBubble (text, x, y) {
   ctx.stroke()
   ctx.fillStyle = TOK.popoverFg
   ctx.fillText(text, bx + 7, by + 14)
+}
+
+// ---------- work: each Pokémon carries its own kit ----------
+// Every so often a free Pokémon — whoever happens to be on the field — takes a job: it
+// trots to an open spot, pulls out its kit with a puff, works, then puts it away. Just for
+// fun: Orca's plugin API gives panels no view of what the coding agent is actually doing.
+const JOBS = {
+  dev:    { weight: 30, dur: [9000, 15000], label: 'coding',      done: ['Committed!', 'Code done!'] },
+  scan:   { weight: 22, dur: [4200, 6500],  label: 'researching', done: null }, // "Data: <subject>"
+  test:   { weight: 18, dur: [6000, 8000],  label: 'testing',     done: ['Tests passed ✓', 'All green ✓'] },
+  build:  { weight: 16, dur: [5500, 8500],  label: 'building',    done: ['Build done!', 'Built!'] },
+  deploy: { weight: 14, dur: [1300, 1700],  label: 'deploying',   done: ['Shipped!', 'Deployed!'] }
+}
+// the team loosely follows a release: whoever finishes a stage hands off to the next one
+const PIPELINE = ['dev', 'test', 'build', 'deploy']
+let nextStage = 'dev'
+let effects = []
+let nextJobAt = performance.now() + rand(3000, 6000)
+const lerp = (a, b, k) => a + (b - a) * k
+const easeOut = (k) => 1 - (1 - k) * (1 - k)
+
+function weightedPick (items, weight) {
+  let r = Math.random() * items.reduce((sum, it) => sum + weight(it), 0)
+  for (const it of items) if ((r -= weight(it)) <= 0) return it
+  return items[items.length - 1]
+}
+
+function director (now) {
+  if (reduceMotion || now < nextJobAt || !pets.length) return
+  const night = phaseNow() === 'night'
+  nextJobAt = now + (night ? rand(25000, 50000) : rand(5000, 11000))
+  const busy = pets.filter((p) => p.job)
+  const cap = night ? 1 : Math.min(3, Math.ceil(pets.length / 2))
+  if (busy.length >= cap) return
+  const free = pets.filter((p) => !p.job && (p.state === 'idle' || p.state === 'walk'))
+  if (!free.length) return
+  // any Pokémon can take any job — Snorlax would just rather nap
+  const pet = weightedPick(free, (p) => (p.mon.key === 'snorlax' ? 0.4 : 1))
+  const taken = new Set(busy.map((p) => p.job.type))
+  assignJob(pet, weightedPick(Object.keys(JOBS), (type) =>
+    JOBS[type].weight * (type === nextStage ? 3 : 1) * (taken.has(type) ? 0.3 : 1)))
+}
+
+// an open patch of grass near the Pokémon, away from the others, with room for the kit
+function openSpot (pet) {
+  let best = { x: pet.x, y: pet.y }, bestRoom = -1
+  for (let i = 0; i < 14; i++) {
+    const x = Math.min(Math.max(pet.x + rand(-130, 130), 56), W - 56)
+    const y = Math.min(Math.max(pet.y + rand(-70, 70), groundTop + 34), H - 16)
+    let room = 999
+    for (const p of pets) {
+      if (p === pet) continue
+      room = Math.min(room, Math.hypot(p.x - x, (p.y - y) * 1.6))
+      // keep clear of where other workers are heading too, kits included
+      if (p.job) room = Math.min(room, Math.hypot(p.job.spot.x - x, (p.job.spot.y - y) * 1.6) - 30)
+    }
+    if (room > bestRoom) { bestRoom = room; best = { x, y } }
+  }
+  return best
+}
+
+function assignJob (pet, type) {
+  const job = { type, ...JOBS[type] }
+  if (type === 'scan') {
+    // research: study another Pokémon on the field with the Pokédex (the grass, if alone)
+    const others = pets.filter((p) => p !== pet)
+    job.target = others.length ? pick(others) : null
+    job.spot = { x: pet.x, y: pet.y }
+  } else {
+    job.spot = openSpot(pet)
+  }
+  pet.job = job
+  pet.setState('goto')
+}
+
+// where the kit stands: on the grass in front of the Pokémon
+function kitAt (pet) {
+  return { x: pet.x + pet.dir * (pet.rect().w * 0.26 + 14), y: pet.y }
+}
+
+function puff (x, y) {
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2
+    effects.push({ kind: 'puff', x, y, vx: Math.cos(a) * 34, vy: Math.sin(a) * 18 - 10, t: 0, life: 380 })
+  }
+}
+
+function startWork (pet) {
+  const job = pet.job
+  pet.setState('work')
+  if (job.type === 'scan') {
+    if (job.target) pet.dir = job.target.x >= pet.x ? 1 : -1
+  } else {
+    // face the side with room for the kit
+    pet.dir = pet.x > W - 64 ? -1 : pet.x < 64 ? 1 : pick([-1, 1])
+    if (job.type !== 'deploy') { const k = kitAt(pet); puff(k.x, k.y - 8) }
+  }
+}
+
+function finishJob (pet) {
+  const job = pet.job
+  const stage = PIPELINE.indexOf(job.type)
+  if (stage >= 0) nextStage = PIPELINE[(stage + 1) % PIPELINE.length]
+  if (job.type === 'deploy') {
+    // the release flies off
+    effects.push({ kind: 'letter', x: pet.x, y: pet.y - pet.mon.feet * SCALE - 30, vx: pet.dir * rand(10, 22), vy: -80, t: 0, life: 1800 })
+  } else if (job.type !== 'scan') {
+    const k = kitAt(pet)
+    puff(k.x, k.y - 8)
+  }
+  const subject = job.target && pets.includes(job.target) ? job.target.mon.name : 'grass'
+  pet.job = null
+  pet.say = job.done ? pick(job.done) : `Data: ${subject}`
+  pet.bubble = 2200
+  pet.setState(reduceMotion ? 'idle' : 'hop')
+}
+
+function dropJob (pet) {
+  pet.job = null
+  pet.setState('idle')
+}
+
+function updateWork (now, dt) {
+  for (const p of pets) {
+    // hammer sparks while building
+    if (p.state === 'work' && p.job.type === 'build' && now - (p.lastSpark || 0) > 430) {
+      p.lastSpark = now
+      const k = kitAt(p)
+      for (let i = 0; i < 4; i++) {
+        effects.push({
+          kind: 'spark', x: k.x, y: k.y - 12, vx: rand(-40, 40), vy: rand(-70, -30),
+          g: 160, t: 0, life: rand(250, 450), color: pick(['#ffd33d', '#ffe9a0', '#ff9f43'])
+        })
+      }
+    }
+  }
+  for (const e of effects) {
+    e.t += dt
+    e.x += e.vx * dt / 1000
+    e.y += e.vy * dt / 1000
+    e.vy += (e.g || 0) * dt / 1000
+  }
+  effects = effects.filter((e) => e.t < e.life)
+}
+
+// pixel-art painter: (x, y, w, h) in art pixels from an origin, `s` screen px each
+function painter (ox, oy, s = SCALE) {
+  return (x, y, w, h, color) => {
+    ctx.fillStyle = color
+    ctx.fillRect(Math.round(ox + x * s), Math.round(oy + y * s), Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)))
+  }
+}
+const INK = '#2b2b35'
+
+function drawLetter (x, y) {
+  const p = painter(x, y)
+  p(0, 0, 6, 4, INK); p(1, 1, 4, 2, '#f8f3e6'); p(2, 1, 2, 1, '#d64545')
+}
+
+// portable kits, drawn bottom-centre on the grass. k = job progress 0..1
+const KITS = {
+  // a little PC: code scrolls on the screen while the keys tap away
+  dev: { w: 14, h: 12, draw (p, k, now) {
+    p(1, 0, 12, 8, INK); p(2, 1, 10, 6, '#c8c8d0'); p(3, 2, 8, 4, '#12301f'); p(5, 8, 4, 1, INK)
+    p(0, 10, 14, 2, INK); p(1, 10, 12, 1, '#d8d8e0')
+    const step = Math.floor(now / 220)
+    for (let i = 0; i < 4; i++) {
+      const n = step + i, indent = n % 3
+      p(3.5 + indent, 2.5 + i * 0.85, Math.min(1.5 + ((n * 7) % 6), 7 - indent), 0.5, ['#7ee787', '#f2cc60', '#79c0ff', '#ff7b72'][n % 4])
+    }
+  } },
+  // a pocket Pokémon Center machine: the balls light up one by one, all green = pass
+  test: { w: 12, h: 10, draw (p, k, now) {
+    p(0, 0, 12, 4, INK); p(1, 1, 10, 2, '#cfc8b8')
+    const lit = Math.floor(k * 5)
+    for (let i = 0; i < 4; i++) {
+      const pass = lit >= 4, on = i < lit
+      p(1 + i * 2.75, 1, 2, 1, pass ? '#56d364' : on ? '#ffd33d' : '#d64545')
+      p(1 + i * 2.75, 2, 2, 1, pass ? '#c9f5d0' : on ? '#fff3b0' : '#f3efe6')
+    }
+    p(0, 4, 12, 6, INK); p(1, 5, 10, 4, '#f3efe6'); p(1, 7, 10, 1, '#e86a83')
+    p(4, 5.5, 4, 1, Math.floor(now / 250) % 2 ? '#56d364' : '#2f7d3a')
+  } },
+  // an anvil: the halves of a Poké Ball close up as the build hammers on
+  build: { w: 12, h: 11, draw (p, k) {
+    p(0, 7, 12, 2, INK); p(1, 7, 10, 1, '#8b8b96'); p(3, 9, 6, 1, '#5d5d6b'); p(2, 10, 8, 1, '#4a4a55')
+    const gap = Math.round((1 - k) * 3)
+    p(3.5, 5, 5, 1, '#f3efe6'); p(4.5, 6, 3, 1, '#f3efe6')
+    p(4.5, 3 - gap, 3, 1, '#d64545'); p(3.5, 4 - gap, 5, 1, '#d64545')
+    if (!gap) { p(3.5, 5, 5, 0.5, INK); p(5.5, 5, 1, 1, '#f3efe6') }
+  } }
+}
+
+// what a worker holds: its kit on the grass, the Pokédex, or the release letter overhead
+function drawJobProps (pet, now) {
+  const job = pet.job
+  const head = pet.y - pet.mon.feet * SCALE - 30
+  if (job.type === 'deploy') {
+    const lift = pet.state === 'work' ? Math.sin(Math.min(1, pet.t / 300) * Math.PI / 2) * 6 + Math.sin(now / 90) : 0
+    drawLetter(pet.x - 6, head - lift)
+    return
+  }
+  if (pet.state !== 'work') return
+  if (job.type === 'scan') {
+    const cx = pet.x + pet.dir * 18, cy = pet.y - pet.mon.feet * SCALE - 4
+    const subject = job.target && pets.includes(job.target) ? job.target : null
+    const tx = subject ? subject.x : cx + pet.dir * 50
+    const ty = subject ? subject.y - subject.mon.feet * SCALE : pet.y
+    const sweep = Math.sin(now / 260) * 8
+    ctx.fillStyle = 'rgba(120,220,255,0.16)'
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty - 12 + sweep); ctx.lineTo(tx, ty + 12 + sweep); ctx.closePath(); ctx.fill()
+    const p = painter(cx - 3.5 * SCALE, cy - 3 * SCALE)
+    p(0, 0, 7, 6, INK); p(1, 1, 5, 4, '#d63c3c'); p(1, 1, 2, 2, Math.floor(now / 300) % 2 ? '#7fd8ff' : '#3a9fd8'); p(3.5, 3.5, 2, 1, '#bfe6c8')
+    return
+  }
+  const kit = KITS[job.type]
+  const at = kitAt(pet)
+  // pops out of thin air, bottom-anchored
+  const s = SCALE * easeOut(Math.min(1, pet.t / 180))
+  if (s <= 0) return
+  ctx.fillStyle = 'rgba(0,0,0,0.18)'
+  ctx.beginPath(); ctx.ellipse(at.x, at.y, kit.w * s * 0.5, 2.5 * s, 0, 0, Math.PI * 2); ctx.fill()
+  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
+  kit.draw(painter(at.x - (kit.w * s) / 2, at.y - kit.h * s, s), Math.min(1, pet.t / pet.until), now)
+  ctx.filter = 'none'
+}
+
+function drawEffects () {
+  for (const e of effects) {
+    const fade = Math.max(0, 1 - e.t / e.life)
+    ctx.globalAlpha = fade
+    if (e.kind === 'spark') {
+      ctx.fillStyle = e.color
+      ctx.fillRect(Math.round(e.x), Math.round(e.y), SCALE, SCALE)
+    } else if (e.kind === 'puff') {
+      const r = SCALE * (1 + (e.t / e.life) * 1.5)
+      ctx.fillStyle = 'rgba(245,245,240,0.9)'
+      ctx.fillRect(Math.round(e.x - r), Math.round(e.y - r), Math.round(r * 2), Math.round(r * 2))
+    } else drawLetter(e.x - 6, e.y + Math.sin(e.t / 120) * 2)
+  }
+  ctx.globalAlpha = 1
 }
 
 // ---------- scenery (cached, redrawn on resize or when the time of day changes) ----------
@@ -422,7 +696,9 @@ function loop (now) {
     bgPhase = phaseNow()
     bg = buildBackground(bgPhase)
   }
+  director(now)
   for (const p of pets) p.update(step)
+  updateWork(now, step)
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const fade = prevBg ? Math.min(1, (now - fadeStart) / SKY_FADE_MS) : 1
@@ -435,6 +711,7 @@ function loop (now) {
   ctx.imageSmoothingEnabled = false
   drawClouds(step)
   for (const p of [...pets].sort((a, b) => a.y - b.y)) p.draw(now)
+  drawEffects()
 }
 
 canvas.addEventListener('click', (e) => {
@@ -446,6 +723,10 @@ canvas.addEventListener('click', (e) => {
   })
   if (!hit) return
   hit.bubble = 1800
+  if (hit.job) { // don't interrupt a worker — just say what they're up to
+    hit.say = `${hit.mon.name} · ${hit.job.label}`
+    return
+  }
   hit.setState(reduceMotion ? 'idle' : 'hop')
 })
 canvas.addEventListener('mousemove', (e) => {
