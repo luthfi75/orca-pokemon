@@ -36,7 +36,7 @@ MANIFEST = {
     "publisher": "luthfi",
     "name": "Pokémon Pets",
     "version": "1.1.0",
-    "description": "Pokémon berjalan-jalan di panel sidebar Orca dan sesekali bekerja dengan alat masing-masing: PC kecil untuk ngoding, Pokédex untuk riset, mesin Pokémon Center untuk test, landasan untuk build, dan surat untuk deploy. Klik untuk menyapa; malam hari mereka tidur.",
+    "description": "Pokémon wander around an Orca sidebar panel and every so often get to work, each with its own kit: a little PC for coding, the Pokédex for research, a Pokémon Center machine for tests, an anvil for builds and a letter for deploys. Click one to say hi; at night they sleep.",
     "author": {"name": "Luthfi"},
     "engines": {"orca": ">=1.4.0"},
     "pluginApi": 1,
