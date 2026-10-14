@@ -25,7 +25,7 @@
   .icon svg { width: 14px; height: 14px; display: block; margin: auto; }
   /* sky forced to a fixed time: framed, so it's clear it isn't following the clock */
   .icon.forced { border-color: var(--muted-foreground); }
-  #c { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; image-rendering: pixelated; cursor: default; }
+  #c { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; image-rendering: pixelated; cursor: default; touch-action: none; }
 </style>
 
 <div class="bar">
@@ -34,7 +34,7 @@
   <button id="add" class="icon" title="Add the selected Pokémon" aria-label="Add">+</button>
   <button id="reset" class="icon" title="Restore the starting party" aria-label="Reset">↺</button>
   <button id="sky" class="icon" aria-label="Sky"></button>
-  <button class="icon info" title="Click a Pokémon to say hi. At night they sleep.&#10;Every so often whoever is on the field gets to work with its own kit: a little PC (coding), the Pokédex (research), a Pokémon Center machine (tests), an anvil (build), a letter (deploy).&#10;Sky button: follow the clock, or force day / dusk / night.&#10;Sprites: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
+  <button class="icon info" title="Click a Pokémon to say hi; press and rub to pet it. At night they sleep.&#10;Pick a berry from the tree (click or drag it), then bring it to a Pokémon to feed it.&#10;Every so often whoever is on the field gets to work with its own kit: a little PC (coding), the Pokédex (research), a Pokémon Center machine (tests), an anvil (build), a letter (deploy).&#10;Sky button: follow the clock, or force day / dusk / night.&#10;Sprites: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
 </div>
 <canvas id="c"></canvas>
 
@@ -79,21 +79,37 @@ function loadImage (src) {
   })
 }
 
+// pixels of the first frame of a row, for measuring where the sprite actually sits in its frame
+function framePixels (anim, row) {
+  const oc = document.createElement('canvas')
+  oc.width = anim.fw
+  oc.height = anim.fh
+  const o = oc.getContext('2d')
+  o.drawImage(anim.img, 0, Math.min(row, anim.rows - 1) * anim.fh, anim.fw, anim.fh, 0, 0, anim.fw, anim.fh)
+  return o.getImageData(0, 0, anim.fw, anim.fh).data
+}
+
 // Distance from the frame centre to the lowest opaque pixel: PMD frames share one centre
 // across animations, so this puts every animation's feet on the same ground line.
 function feetOffset (anim) {
   try {
-    const oc = document.createElement('canvas')
-    oc.width = anim.fw
-    oc.height = anim.fh
-    const o = oc.getContext('2d')
-    o.drawImage(anim.img, 0, Math.min(ROW.right, anim.rows - 1) * anim.fh, anim.fw, anim.fh, 0, 0, anim.fw, anim.fh)
-    const d = o.getImageData(0, 0, anim.fw, anim.fh).data
+    const d = framePixels(anim, ROW.right)
     for (let y = anim.fh - 1; y >= 0; y--) {
       for (let x = 0; x < anim.fw; x++) if (d[(y * anim.fw + x) * 4 + 3] > 0) return y + 1 - anim.fh / 2
     }
   } catch (_) {}
   return anim.fh / 2 - 4
+}
+
+// ...and up to the top of the head when facing front: where a petting hand lands
+function headOffset (anim) {
+  try {
+    const d = framePixels(anim, ROW.down)
+    for (let y = 0; y < anim.fh; y++) {
+      for (let x = 0; x < anim.fw; x++) if (d[(y * anim.fw + x) * 4 + 3] > 0) return y - anim.fh / 2
+    }
+  } catch (_) {}
+  return -anim.fh / 4
 }
 
 function frameAt (anim, ms) {
@@ -157,6 +173,7 @@ class Pet {
     this.bubble = 0
     this.say = '' // bubble text; empty shows the Pokémon's name
     this.job = null // see "work" below
+    this.snack = null // a berry it's eating, see "berry tree" below
     this.setState(reduceMotion ? 'idle' : pick(['walk', 'idle']))
   }
 
@@ -201,9 +218,11 @@ class Pet {
   }
 
   update (dt) {
-    this.t += dt
     if (this.bubble > 0) this.bubble -= dt
     else this.say = ''
+    if (this.snack) return updateSnack(this, dt)
+    if (isPetted(this)) return // holds still while being petted; a job just waits
+    this.t += dt
     if (this.state === 'goto') {
       const spot = this.job.spot
       const dx = spot.x - this.x, dy = spot.y - this.y, d = Math.hypot(dx, dy)
@@ -235,7 +254,8 @@ class Pet {
 
   anim () {
     const a = this.mon.anims
-    if (this.state === 'walk' || this.state === 'goto') return a.walk
+    if (this.snack) return a.eat || a.idle
+    if ((this.state === 'walk' || this.state === 'goto') && !isPetted(this)) return a.walk
     if (this.state === 'sleep') return a.sleep || a.idle
     if (this.state === 'hop') return a.hop || a.idle
     return a.idle // workers stay in their idle pose facing the kit; the kit shows the action
@@ -244,7 +264,9 @@ class Pet {
   row (anim) {
     let row
     const moving = this.state === 'walk' || this.state === 'goto'
-    if (moving && Math.abs(this.vy) > Math.abs(this.vx) * 0.6) {
+    if (this.snack) {
+      row = ROW.down // eats facing you
+    } else if (moving && Math.abs(this.vy) > Math.abs(this.vx) * 0.6) {
       row = this.vy > 0 ? (this.dir > 0 ? ROW.downRight : ROW.downLeft) : (this.dir > 0 ? ROW.upRight : ROW.upLeft)
     } else if (this.state === 'hop' || (this.state === 'idle' && this.facingFront)) {
       row = ROW.down
@@ -262,26 +284,39 @@ class Pet {
 
   draw (now) {
     const anim = this.anim()
-    const frame = reduceMotion ? 0 : frameAt(anim, this.state === 'hop' ? this.t : now + this.mon.phase)
+    const frame = reduceMotion ? 0 : frameAt(anim, this.snack ? this.snack.t : this.state === 'hop' ? this.t : now + this.mon.phase)
     const row = this.row(anim)
-    // small work motions: a 1px bob while typing, a lean into each hammer blow
+    // small motions: a 1px bob while typing (or chewing, without an eating sheet), a lean into each hammer blow
     let bob = 0, lean = 0
-    if (this.state === 'work') {
+    if (this.snack) {
+      if (!this.mon.anims.eat) bob = Math.floor(this.snack.t / 160) % 2
+    } else if (this.state === 'work') {
       if (this.job.type === 'dev') bob = Math.floor(now / 170) % 2
       else if (this.job.type === 'build' && now - (this.lastSpark || 0) < 140) lean = this.dir * 3
     }
     const cy = this.y - this.mon.feet * SCALE - bob
-    // ground shadow
+    // under a petting hand: squashed from the feet up, so they stay planted
+    const sq = squashOf(this), sx = 1 + sq * 0.1, sy = 1 - sq * 0.14
+    // ground shadow, ringed while a carried berry hovers over it
+    const rx = 9 * SCALE * this.mon.shadow, ry = 3 * SCALE
     ctx.fillStyle = 'rgba(0,0,0,0.22)'
     ctx.beginPath()
-    ctx.ellipse(this.x, this.y - 1, 9 * SCALE * this.mon.shadow, 3 * SCALE, 0, 0, Math.PI * 2)
+    ctx.ellipse(this.x, this.y - 1, rx, ry, 0, 0, Math.PI * 2)
     ctx.fill()
+    if (this === aim) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.ellipse(this.x, this.y - 1, rx + 4, ry + 2, 0, 0, Math.PI * 2)
+      ctx.stroke()
+    }
     ctx.drawImage(
       anim.img, frame * anim.fw, row * anim.fh, anim.fw, anim.fh,
-      Math.round(this.x + lean - (anim.fw / 2) * SCALE), Math.round(cy - (anim.fh / 2) * SCALE),
-      anim.fw * SCALE, anim.fh * SCALE
+      Math.round(this.x + lean - (anim.fw / 2) * SCALE * sx), Math.round(this.y - bob - (anim.fh / 2 + this.mon.feet) * SCALE * sy),
+      Math.round(anim.fw * SCALE * sx), Math.round(anim.fh * SCALE * sy)
     )
     if (this.state === 'sleep') drawZzz(this.x + 10, this.rect().y + 8, now)
+    if (this.snack) drawSnack(this)
     if (this.job) drawJobProps(this, now)
     if (this.bubble > 0) drawBubble(this.say || this.mon.name, this.x, Math.min(this.rect().y, cy - (anim.fh / 2) * SCALE + 6) - 4)
   }
@@ -345,7 +380,7 @@ function director (now) {
   const busy = pets.filter((p) => p.job)
   const cap = night ? 1 : Math.min(3, Math.ceil(pets.length / 2))
   if (busy.length >= cap) return
-  const free = pets.filter((p) => !p.job && (p.state === 'idle' || p.state === 'walk'))
+  const free = pets.filter((p) => !p.job && !p.snack && !isPetted(p) && (p.state === 'idle' || p.state === 'walk'))
   if (!free.length) return
   // any Pokémon can take any job — Snorlax would just rather nap
   const pet = weightedPick(free, (p) => (p.mon.key === 'snorlax' ? 0.4 : 1))
@@ -465,6 +500,13 @@ function painter (ox, oy, s = SCALE) {
 }
 const INK = '#2b2b35'
 
+// pixel map: one string per row, one palette key per art pixel ('.' = clear)
+function drawMap (p, map, pal) {
+  map.forEach((line, y) => {
+    for (let x = 0; x < line.length; x++) if (pal[line[x]]) p(x, y, 1, 1, pal[line[x]])
+  })
+}
+
 function drawLetter (x, y) {
   const p = painter(x, y)
   p(0, 0, 6, 4, INK); p(1, 1, 4, 2, '#f8f3e6'); p(2, 1, 2, 1, '#d64545')
@@ -549,9 +591,298 @@ function drawEffects () {
       const r = SCALE * (1 + (e.t / e.life) * 1.5)
       ctx.fillStyle = 'rgba(245,245,240,0.9)'
       ctx.fillRect(Math.round(e.x - r), Math.round(e.y - r), Math.round(r * 2), Math.round(r * 2))
+    } else if (e.kind === 'heart') {
+      drawMap(painter(e.x - 2.5 * SCALE + Math.sin(e.t / 150) * 3, e.y - 2.5 * SCALE), HEART, HEART_PAL)
     } else drawLetter(e.x - 6, e.y + Math.sin(e.t / 120) * 2)
   }
   ctx.globalAlpha = 1
+}
+
+// ---------- berry tree: pick a berry, hand it to a Pokémon ----------
+// Click a berry (or anywhere on the leaves) to pick one, then click a Pokémon — or drag it
+// straight there. Let go anywhere else and it hops back onto its branch. Eaten ones regrow.
+const BERRIES = {
+  oran: { name: 'Oran Berry', body: '#4a7fd6', light: '#b5d0ff', dark: '#2c4f96' },
+  pecha: { name: 'Pecha Berry', body: '#f29bbd', light: '#ffe0ec', dark: '#c4628a' },
+  cheri: { name: 'Cheri Berry', body: '#e0483e', light: '#ffa79a', dark: '#9c2b25' },
+  sitrus: { name: 'Sitrus Berry', body: '#f2cf3c', light: '#fff5bf', dark: '#b88f1e' }
+}
+const BERRY = ['...sl..', '..ooo..', '.obbbo.', 'obwbbbo', 'obbbbbo', 'obbbbdo', '.obddo.', '..ooo..']
+const HEART = ['rr.rr', 'rwrrr', 'rrrrr', '.rrr.', '..r..']
+const HEART_PAL = { r: '#ff5a7e', w: '#ffd0da' }
+const TREE_W = 37, TREE_H = 44 // art px; the trunk's foot is bottom-centre
+const CANOPY_H = 30 // art rows of leaves above the bare trunk
+const tree = {
+  x: 0, y: 0, // foot of the trunk, on the back edge of the field
+  img: null, prev: null, // cached per time of day; prev fades out with the old sky
+  shake: -1e4, // when a berry was last picked: the leaves rustle
+  // ripe | held | gone (eaten, regrows `at`) | back (hopping home from bx, by since `born`)
+  slots: [[8, 20], [28, 20], [18, 23], [12, 11], [24, 11]].map(([ax, ay]) => ({ ax, ay, state: 'ripe', type: null, at: 0, born: -1e4 }))
+}
+for (const s of tree.slots) s.type = randomBerry(s)
+let held = null // the berry being carried: { slot, type, x, y, drag, moved }
+let aim = null // the Pokémon a carried berry is hovering over
+
+// a berry for `slot`: any kind, but never a third of one color on the tree
+// (a berry in hand or hopping home still counts — it may end up back on its branch)
+function randomBerry (slot) {
+  const count = (type) => tree.slots.filter((s) => s !== slot && s.state !== 'gone' && s.type === type).length
+  return pick(Object.keys(BERRIES).filter((type) => count(type) < 2))
+}
+
+function slotPos (s) {
+  return { x: tree.x + (s.ax + 0.5 - TREE_W / 2) * SCALE, y: tree.y + (s.ay + 0.5 - TREE_H) * SCALE }
+}
+
+function drawBerry (x, y, type, s = SCALE) {
+  const b = BERRIES[type]
+  drawMap(painter(x - 3.5 * s, y - 4.5 * s, s), BERRY, { s: '#3b6b2a', l: '#79c454', o: INK, b: b.body, w: b.light, d: b.dark })
+}
+
+// a round little tree in pixel art: puffs of leaves lit from the top left, on a stubby trunk
+function buildTree (phase) {
+  const night = phase === 'night'
+  const [lo, ld, lm, ll] = night ? ['#0e2418', '#1a3d29', '#245038', '#306447'] : ['#1d3f24', '#2e6b37', '#3f8a45', '#62b154']
+  const [bo, bd, bl] = night ? ['#170f08', '#2c1d11', '#41301c'] : ['#3a2414', '#5c3b20', '#87592e']
+  const px = new Array(TREE_W * TREE_H).fill(null)
+  const set = (x, y, c) => { if (x >= 0 && y >= 0 && x < TREE_W && y < TREE_H) px[y * TREE_W + x] = c }
+  const mid = (TREE_W - 1) / 2
+  for (let y = 22; y < TREE_H - 1; y++) {
+    const half = y >= TREE_H - 3 ? 3 : 2 // roots flare out
+    for (let x = mid - half; x <= mid + half; x++) set(x, y, x < mid && y > CANOPY_H ? bl : bd)
+  }
+  for (const [cx, cy, rad] of [[9, 21, 7.5], [28, 21, 7.5], [12.5, 10.5, 8], [24.5, 10.5, 8], [18.5, 17.5, 11]]) {
+    for (let y = Math.floor(cy - rad); y < cy + rad; y++) {
+      for (let x = Math.floor(cx - rad); x < cx + rad; x++) {
+        const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+        if (d > rad) continue
+        const lit = Math.hypot(x + 0.5 - (cx - rad * 0.35), y + 0.5 - (cy - rad * 0.4)) < rad * 0.42
+        const shade = d > rad - 2.5 && x + 0.5 - cx + y + 0.5 - cy > rad * 0.3
+        set(x, y, lit ? ll : shade ? ld : lm)
+      }
+    }
+  }
+  const r = seeded(5)
+  for (let i = 0; i < 46; i++) { // leaf specks
+    const x = Math.floor(r() * TREE_W), y = Math.floor(r() * CANOPY_H)
+    if (px[y * TREE_W + x] === lm) set(x, y, r() < 0.6 ? ld : ll)
+  }
+  // 1px outline around the whole shape
+  const shape = px.slice()
+  const at = (x, y) => (x >= 0 && y >= 0 && x < TREE_W && y < TREE_H ? shape[y * TREE_W + x] : null)
+  for (let y = 0; y < TREE_H; y++) {
+    for (let x = 0; x < TREE_W; x++) {
+      const n = !shape[y * TREE_W + x] && (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1))
+      if (n) set(x, y, n === bl || n === bd ? bo : lo)
+    }
+  }
+  const off = document.createElement('canvas')
+  off.width = TREE_W
+  off.height = TREE_H
+  const g = off.getContext('2d')
+  px.forEach((c, i) => { if (c) { g.fillStyle = c; g.fillRect(i % TREE_W, Math.floor(i / TREE_W), 1, 1) } })
+  return off
+}
+
+function drawTree (now, fade) {
+  const ox = tree.x - (TREE_W / 2) * SCALE, oy = tree.y - TREE_H * SCALE
+  ctx.fillStyle = 'rgba(0,0,0,0.2)'
+  ctx.beginPath()
+  ctx.ellipse(tree.x, tree.y - 2, 13 * SCALE, 3 * SCALE, 0, 0, Math.PI * 2)
+  ctx.fill()
+  // the leaves rustle for a moment after a pick
+  const k = (now - tree.shake) / 360
+  const dx = k < 1 && !reduceMotion ? Math.round(Math.sin(k * Math.PI * 5) * 2 * (1 - k)) : 0
+  const blit = (img, alpha) => {
+    ctx.globalAlpha = alpha
+    ctx.drawImage(img, 0, 0, TREE_W, CANOPY_H, ox + dx, oy, TREE_W * SCALE, CANOPY_H * SCALE)
+    ctx.drawImage(img, 0, CANOPY_H, TREE_W, TREE_H - CANOPY_H, ox, oy + CANOPY_H * SCALE, TREE_W * SCALE, (TREE_H - CANOPY_H) * SCALE)
+    ctx.globalAlpha = 1
+  }
+  if (fade < 1 && tree.prev) blit(tree.prev, 1)
+  else tree.prev = null
+  blit(tree.img, fade)
+  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
+  for (const s of tree.slots) {
+    const at = slotPos(s)
+    if (s.state === 'ripe') {
+      const grow = easeOut(Math.min(1, (now - s.born) / 400)) // regrown ones pop in
+      if (grow > 0) drawBerry(at.x + dx, at.y, s.type, SCALE * grow)
+    } else if (s.state === 'back') {
+      const t = easeOut(Math.min(1, (now - s.born) / 300))
+      drawBerry(lerp(s.bx, at.x, t), lerp(s.by, at.y, t) - Math.sin(t * Math.PI) * 18, s.type)
+    }
+  }
+  ctx.filter = 'none'
+}
+
+function updateTree (now) {
+  for (const s of tree.slots) {
+    if (s.state === 'back' && now - s.born >= 300) {
+      s.state = 'ripe'
+      s.born = -1e4
+    } else if (s.state === 'gone' && now >= s.at) {
+      s.state = 'ripe'
+      s.type = randomBerry(s)
+      s.born = now
+    }
+  }
+}
+
+// the ripe berry nearest to (x, y), within `reach`
+function berryAt (x, y, reach) {
+  let best = null
+  for (const s of tree.slots) {
+    if (s.state !== 'ripe') continue
+    const at = slotPos(s), d = Math.hypot(at.x - x, at.y - y)
+    if (d <= reach) { reach = d; best = s }
+  }
+  return best
+}
+
+function onCanopy (x, y) {
+  return Math.abs(x - tree.x) <= (TREE_W / 2) * SCALE && y >= tree.y - TREE_H * SCALE && y <= tree.y - (TREE_H - CANOPY_H) * SCALE
+}
+
+function pickBerry (slot, x, y) {
+  slot.state = 'held'
+  held = { slot, type: slot.type, x, y, drag: true, moved: 0 }
+  tree.shake = performance.now()
+  const at = slotPos(slot)
+  for (let i = 0; i < 3; i++) { // a few leaves come loose
+    effects.push({
+      kind: 'spark', x: at.x + rand(-12, 12), y: at.y + rand(-8, 4), vx: rand(-14, 14), vy: rand(16, 30),
+      t: 0, life: rand(700, 1100), color: bgPhase === 'night' ? '#245038' : pick(['#3f8a45', '#62b154'])
+    })
+  }
+}
+
+// let go of the carried berry: a Pokémon under it eats it, anywhere else it hops back to its branch
+function dropBerry (x, y) {
+  const { slot, type } = held
+  held = null
+  const pet = petAt(x, y)
+  if (pet && feed(pet, type)) {
+    slot.state = 'gone'
+    slot.at = performance.now() + rand(9000, 16000)
+  } else {
+    slot.state = 'back'
+    slot.born = performance.now()
+    slot.bx = x
+    slot.by = y
+  }
+}
+
+function feed (pet, type) {
+  if (pet.snack) return false // one at a time
+  if (pet.state === 'sleep') pet.setState('idle') // food wakes anyone up, Snorlax included
+  const eat = pet.mon.anims.eat
+  pet.snack = { type, t: 0, dur: eat ? (eat.total * 1000 / 60) * 4 : 1800 }
+  return true
+}
+
+// three bites with crumbs flying, then a happy hop (a worker just gets back to it)
+function updateSnack (pet, dt) {
+  const s = pet.snack
+  const bite = Math.floor((s.t / s.dur) * 3)
+  s.t += dt
+  if (Math.floor((s.t / s.dur) * 3) > bite) {
+    const m = mouthAt(pet), b = BERRIES[s.type]
+    for (let i = 0; i < 4; i++) {
+      effects.push({ kind: 'spark', x: m.x + rand(-4, 4), y: m.y, vx: rand(-45, 45), vy: rand(-60, -20), g: 200, t: 0, life: rand(300, 450), color: pick([b.body, b.light]) })
+    }
+  }
+  if (s.t < s.dur) return
+  pet.snack = null
+  pet.say = pick(['Nom nom!', 'Yum!', `${BERRIES[s.type].name} ♥`])
+  pet.bubble = 2000
+  hearts(pet, 2)
+  if (!pet.job) pet.setState(reduceMotion ? 'idle' : 'hop')
+}
+
+// where a snack is held: about a third of the way from the feet up to the top of the head
+function mouthAt (pet) {
+  return { x: pet.x, y: pet.y - (pet.mon.feet - pet.anim().head) * SCALE * 0.32 }
+}
+
+function drawSnack (pet) {
+  const s = pet.snack, m = mouthAt(pet)
+  const left = 3 - Math.min(3, Math.floor((s.t / s.dur) * 3)) // bites left
+  if (!left) return
+  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
+  drawBerry(m.x, m.y, s.type, SCALE * (0.4 + 0.2 * left))
+  ctx.filter = 'none'
+}
+
+function hearts (pet, n) {
+  const top = pet.y - (pet.mon.feet - pet.anim().head) * SCALE
+  for (let i = 0; i < n; i++) {
+    effects.push({ kind: 'heart', x: pet.x + rand(-12, 12), y: top - rand(2, 10), vx: rand(-8, 8), vy: rand(-34, -22), t: 0, life: rand(900, 1200) })
+  }
+}
+
+// ---------- petting: press on a Pokémon and rub ----------
+// A press that starts to rub turns into petting: a hand pats the head in time with the rubbing
+// ("pet pet"), the Pokémon squashes under it and hearts float up. A press that doesn't move
+// is still a plain click (say hi).
+const HAND = [
+  '...oooooooo..',
+  '...obbbbbbo..',
+  '...oBBBBBBo..',
+  '..oossssssoo.',
+  '.osssssssssso',
+  'osssossssssso',
+  'osssossssssso',
+  '.ooosssssssso',
+  '...oshshshsso',
+  '...oshshshso.',
+  '...oshshshso.',
+  '....ooooooo..'
+]
+const HAND_PAL = { o: INK, b: '#5b8fd6', B: '#3d6db0', s: '#fbe3c8', h: '#e8bf98' }
+let press = null // pointer down on a Pokémon: { pet, x0, y0, x, y, travel, rubbing, phase, pats }
+
+const isPetted = (p) => !!press && press.rubbing && press.pet === p
+// how far the hand is pressing down: 0 at rest, 1 as a pat lands
+const squashOf = (p) => (isPetted(p) && !reduceMotion ? Math.sin((press.phase % 1) * Math.PI) : 0)
+
+function startPetting () {
+  press.rubbing = true
+  const p = press.pet
+  if (!p.job && !p.snack && p.state !== 'sleep') { // stops and turns to you
+    p.setState('idle')
+    p.facingFront = true
+  }
+}
+
+function endPetting () {
+  const p = press.pet
+  if (!pets.includes(p) || !press.pats) return
+  p.say = p.state === 'sleep' ? 'zzz… ♥' : pick(['♥', 'Hehe~ ♥', '♥ ♥'])
+  p.bubble = 1600
+  if (!p.job && !p.snack && p.state !== 'sleep') p.setState(reduceMotion ? 'idle' : 'hop')
+}
+
+function updatePetting (dt) {
+  if (!press?.rubbing) return
+  if (!pets.includes(press.pet)) { press = null; return }
+  // every ~36px of rubbing queues a pat; the hand always finishes one, then rests
+  const before = press.phase
+  press.phase = Math.min(Math.ceil(press.travel / 36), press.phase + (dt / 1000) * 4.5)
+  if (Math.round(press.phase) > Math.round(before)) { // a pat lands
+    press.pats++
+    hearts(press.pet, 1)
+  }
+}
+
+function drawPetting () {
+  if (!press?.rubbing) return
+  const p = press.pet, sq = squashOf(p)
+  const head = p.y - (p.mon.feet - p.anim().head) * SCALE * (1 - sq * 0.14)
+  const span = Math.min(p.rect().w * 0.2, 14) // the hand slides across the head with the rubbing
+  const hx = Math.min(Math.max(press.x, p.x - span), p.x + span)
+  // fingertips on the head as a pat lands, lifted a little in between
+  drawMap(painter(hx - 6.5 * SCALE, head - (10 + (1 - sq) * 2) * SCALE), HAND, HAND_PAL)
 }
 
 // ---------- scenery (cached, redrawn on resize or when the time of day changes) ----------
@@ -652,9 +983,12 @@ function resize () {
   canvas.width = Math.round(W * dpr)
   canvas.height = Math.round(H * dpr)
   groundTop = Math.round(H - Math.max(110, H * 0.45))
+  tree.x = Math.round(Math.min(Math.max(46, W * 0.17), 110))
+  tree.y = groundTop + 12
   bgPhase = phaseNow()
   bg = buildBackground(bgPhase)
-  prevBg = null // a resize redraws the sky at the new size; nothing to fade from
+  tree.img = buildTree(bgPhase)
+  prevBg = tree.prev = null // a resize redraws the sky at the new size; nothing to fade from
   for (const p of pets) {
     p.x = Math.min(Math.max(p.x, 24), Math.max(24, W - 24))
     p.y = Math.min(Math.max(p.y, groundTop + 30), H - 12)
@@ -692,11 +1026,16 @@ function loop (now) {
   acc = 0
   if (phaseNow() !== bgPhase) {
     prevBg = bg
+    tree.prev = tree.img
     fadeStart = now
     bgPhase = phaseNow()
     bg = buildBackground(bgPhase)
+    tree.img = buildTree(bgPhase)
   }
   director(now)
+  updateTree(now)
+  updatePetting(step)
+  aim = held ? petAt(held.x, held.y) || null : null
   for (const p of pets) p.update(step)
   updateWork(now, step)
   ctx.setTransform(1, 0, 0, 1, 0, 0)
@@ -710,29 +1049,91 @@ function loop (now) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.imageSmoothingEnabled = false
   drawClouds(step)
+  drawTree(now, fade)
   for (const p of [...pets].sort((a, b) => a.y - b.y)) p.draw(now)
   drawEffects()
+  drawPetting()
+  if (held) drawBerry(held.x, held.y, held.type)
 }
 
-canvas.addEventListener('click', (e) => {
+// ---------- pointer: say hi, pet, pick and feed ----------
+function pointerAt (e) {
   const r = canvas.getBoundingClientRect()
-  const x = e.clientX - r.left, y = e.clientY - r.top
-  const hit = [...pets].sort((a, b) => b.y - a.y).find((p) => {
+  return { x: e.clientX - r.left, y: e.clientY - r.top }
+}
+
+function petAt (x, y) {
+  return [...pets].sort((a, b) => b.y - a.y).find((p) => {
     const b = p.rect()
     return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
   })
-  if (!hit) return
-  hit.bubble = 1800
-  if (hit.job) { // don't interrupt a worker — just say what they're up to
-    hit.say = `${hit.mon.name} · ${hit.job.label}`
+}
+
+// what's under the pointer: a berry first (they're small), then a Pokémon, then the rest of the leaves
+function targetAt (x, y) {
+  const slot = berryAt(x, y, 10)
+  if (slot) return { slot }
+  const pet = petAt(x, y)
+  if (pet) return { pet }
+  return { slot: onCanopy(x, y) ? berryAt(x, y, Infinity) : null }
+}
+
+function updateCursor (x, y) {
+  const t = targetAt(x, y)
+  canvas.style.cursor = press?.rubbing ? 'none' : held ? 'grabbing' : t.slot ? 'grab' : t.pet ? 'pointer' : 'default'
+}
+
+function greet (pet) {
+  pet.bubble = 1800
+  if (pet.job) { // don't interrupt a worker — just say what they're up to
+    pet.say = `${pet.mon.name} · ${pet.job.label}`
     return
   }
-  hit.setState(reduceMotion ? 'idle' : 'hop')
+  pet.setState(reduceMotion ? 'idle' : 'hop')
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || press) return
+  const { x, y } = pointerAt(e)
+  if (held) return dropBerry(x, y) // the second click of click-to-carry
+  const t = targetAt(x, y)
+  if (!t.slot && !t.pet) return
+  canvas.setPointerCapture(e.pointerId)
+  if (t.slot) pickBerry(t.slot, x, y)
+  else press = { pet: t.pet, x0: x, y0: y, x, y, travel: 0, rubbing: false, phase: 0, pats: 0 }
+  updateCursor(x, y)
 })
-canvas.addEventListener('mousemove', (e) => {
-  const r = canvas.getBoundingClientRect()
-  const x = e.clientX - r.left, y = e.clientY - r.top
-  canvas.style.cursor = pets.some((p) => { const b = p.rect(); return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h }) ? 'pointer' : 'default'
+canvas.addEventListener('pointermove', (e) => {
+  const { x, y } = pointerAt(e)
+  if (held) {
+    held.moved += Math.hypot(x - held.x, y - held.y)
+    held.x = x
+    held.y = y
+  }
+  if (press) {
+    press.travel += Math.hypot(x - press.x, y - press.y)
+    press.x = x
+    press.y = y
+    if (!press.rubbing && Math.hypot(x - press.x0, y - press.y0) > 6) startPetting()
+  }
+  updateCursor(x, y)
+})
+canvas.addEventListener('pointerup', (e) => {
+  const { x, y } = pointerAt(e)
+  if (held?.drag) {
+    held.drag = false
+    if (held.moved > 12) dropBerry(x, y) // dragged somewhere; a plain click keeps carrying it
+  }
+  if (press) {
+    if (press.rubbing) endPetting()
+    else greet(press.pet)
+    press = null
+  }
+  updateCursor(x, y)
+})
+canvas.addEventListener('pointercancel', () => {
+  if (press?.rubbing) endPetting()
+  press = null
 })
 
 async function init () {
@@ -746,6 +1147,7 @@ async function init () {
         rows: Math.max(1, Math.round(img.height / a.fh)),
         total: a.dur.reduce((s, d) => s + d, 0)
       }
+      anims[name].head = headOffset(anims[name])
     }
     mons[key] = { key, name: m.name, anims, feet: feetOffset(anims.walk), shadow: m.shadow, phase: Math.random() * 5000 }
     const opt = document.createElement('option')
