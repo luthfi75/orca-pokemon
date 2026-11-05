@@ -17,25 +17,43 @@
     font: inherit; color: var(--foreground); background: var(--secondary, var(--muted));
     border: 1px solid var(--border); border-radius: 6px; height: 24px; padding: 0 8px;
   }
-  select { flex: 1 1 auto; min-width: 0; max-width: 140px; margin-left: auto; }
+  select { flex: 1 1 auto; min-width: 0; max-width: 140px; }
+  #remove { margin-left: auto; } /* − on the left of the list, + on its right */
   .icon { width: 24px; padding: 0; flex: none; font-size: 14px; line-height: 1; }
   button { cursor: pointer; transition: background-color .15s ease; }
   button:hover, select:hover { background: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; background: var(--secondary, var(--muted)); }
   .info { color: var(--muted-foreground); font-size: 12px; }
   .icon svg { width: 14px; height: 14px; display: block; margin: auto; }
   /* sky forced to a fixed time: framed, so it's clear it isn't following the clock */
   .icon.forced { border-color: var(--muted-foreground); }
-  #c { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; image-rendering: pixelated; cursor: default; touch-action: none; }
+  #c, .scenery { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; }
+  #c { image-rendering: pixelated; cursor: default; touch-action: none; }
+  .scenery { pointer-events: none; }
+  .menu {
+    position: absolute; top: 33px; z-index: 1; min-width: 168px; padding: 4px; box-sizing: border-box;
+    background: var(--popover, var(--background)); color: var(--popover-foreground, var(--foreground));
+    border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+  }
+  .menu[hidden] { display: none; }
+  .menu button {
+    display: block; width: 100%; height: 26px; padding: 0 8px; text-align: left;
+    background: transparent; border: 0; border-radius: 5px;
+  }
+  .menu button:hover, .menu button:focus-visible { background: var(--accent); outline: none; }
+  .menu .label { padding: 6px 8px 2px; color: var(--muted-foreground); font-size: 11px; }
 </style>
 
-<div class="bar">
+<div class="bar" id="bar">
   <span class="title">Pokémon<span class="count" id="count"></span></span>
+  <button id="remove" class="icon" aria-label="Remove">−</button>
   <select id="pick" aria-label="Choose a Pokémon"></select>
-  <button id="add" class="icon" title="Add the selected Pokémon" aria-label="Add">+</button>
-  <button id="reset" class="icon" title="Restore the starting party" aria-label="Reset">↺</button>
+  <button id="add" class="icon" aria-label="Add">+</button>
+  <button id="reset" class="icon" title="Reset the party, or swap one Pokémon" aria-label="Reset" aria-haspopup="menu" aria-expanded="false">↺</button>
   <button id="sky" class="icon" aria-label="Sky"></button>
-  <button class="icon info" title="Click a Pokémon to say hi; press and rub to pet it. At night they sleep.&#10;Pick a berry from the tree (click or drag it), then bring it to a Pokémon to feed it.&#10;Every so often whoever is on the field gets to work with its own kit: a little PC (coding), the Pokédex (research), a Pokémon Center machine (tests), an anvil (build), a letter (deploy).&#10;Sky button: follow the clock, or force day / dusk / night.&#10;Sprites: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
+  <button class="icon info" title="Click a Pokémon to say hi; press and rub to pet it. At night they sleep.&#10;+ adds the Pokémon picked in the list, − takes it off the field (or the last one that came). Up to 4 at a time.&#10;↺ resets the whole party, or swaps one Pokémon for a new one.&#10;Pick a berry from the tree (click or drag it), then bring it to a Pokémon to feed it.&#10;Every so often whoever is on the field gets to work with its own kit: a little PC (coding), the Pokédex (research), a Pokémon Center machine (tests), an anvil (build), a letter (deploy).&#10;Sky button: follow the clock, or force day / dusk / night.&#10;Sprites: PMD Sprite Repository (SpriteCollab), CC BY-NC 4.0." aria-label="Info">ⓘ</button>
 </div>
+<div class="menu" id="menu" role="menu" hidden></div>
 <canvas id="c"></canvas>
 
 <script>
@@ -43,8 +61,10 @@
 const DATA = /*__SPRITES__*/null
 
 const SCALE = 2 // pixel-art scale in CSS px
-const MAX_PETS = 10
-const FPS = 30
+const MAX_PETS = 4
+// frames per second: smooth while anything moves, lower while everyone idles or works in
+// place, lower still once they're all asleep
+const FPS = { busy: 30, calm: 15, asleep: 8 }
 const ROW = { down: 0, downRight: 1, right: 2, upRight: 3, up: 4, upLeft: 5, left: 6, downLeft: 7 }
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -53,8 +73,8 @@ const ctx = canvas.getContext('2d')
 const mons = {}
 let pets = []
 let W = 0, H = 0, groundTop = 0, dpr = 1
-let bg = null, bgPhase = ''
-let prevBg = null, fadeStart = 0 // previous sky, crossfaded out after a phase change
+let scenery = null, bgPhase = ''
+let fadeStart = 0 // when the time of day last changed: the old tree fades out with the old sky
 const SKY_FADE_MS = 700
 
 const rand = (a, b) => a + Math.random() * (b - a)
@@ -491,20 +511,55 @@ function updateWork (now, dt) {
   effects = effects.filter((e) => e.t < e.life)
 }
 
+// Night dims props on the field to 75% brightness. The colors are dimmed once and kept,
+// rather than drawing through a canvas filter every frame.
+const dimmed = new Map()
+function dim (color) {
+  let out = dimmed.get(color)
+  if (!out) {
+    const n = parseInt(color.slice(1), 16)
+    out = `rgb(${Math.round((n >> 16) * 0.75)},${Math.round(((n >> 8) & 255) * 0.75)},${Math.round((n & 255) * 0.75)})`
+    dimmed.set(color, out)
+  }
+  return out
+}
+
 // pixel-art painter: (x, y, w, h) in art pixels from an origin, `s` screen px each
-function painter (ox, oy, s = SCALE) {
+function painter (ox, oy, s = SCALE, night = false) {
   return (x, y, w, h, color) => {
-    ctx.fillStyle = color
+    ctx.fillStyle = night ? dim(color) : color
     ctx.fillRect(Math.round(ox + x * s), Math.round(oy + y * s), Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)))
   }
 }
 const INK = '#2b2b35'
 
-// pixel map: one string per row, one palette key per art pixel ('.' = clear)
-function drawMap (p, map, pal) {
-  map.forEach((line, y) => {
-    for (let x = 0; x < line.length; x++) if (pal[line[x]]) p(x, y, 1, 1, pal[line[x]])
-  })
+// Pixel maps (one string per row, one palette key per art pixel, '.' = clear) are painted
+// once into a small canvas each and drawn from there: one drawImage instead of a fillRect
+// per pixel, every frame.
+const sprites = new Map()
+function sprite (id, map, pal, night = false) {
+  const key = night ? id + ':night' : id
+  let c = sprites.get(key)
+  if (!c) {
+    c = document.createElement('canvas')
+    c.width = Math.max(...map.map((line) => line.length))
+    c.height = map.length
+    const g = c.getContext('2d')
+    map.forEach((line, y) => {
+      for (let x = 0; x < line.length; x++) {
+        if (!pal[line[x]]) continue
+        g.fillStyle = night ? dim(pal[line[x]]) : pal[line[x]]
+        g.fillRect(x, y, 1, 1)
+      }
+    })
+    sprites.set(key, c)
+  }
+  return c
+}
+
+// a sprite with its top left at (x, y), `s` screen px per art pixel
+function blit (img, x, y, s = SCALE) {
+  ctx.drawImage(img, Math.round(x), Math.round(y), Math.max(1, Math.round(img.width * s)), Math.max(1, Math.round(img.height * s)))
 }
 
 function drawLetter (x, y) {
@@ -575,9 +630,7 @@ function drawJobProps (pet, now) {
   if (s <= 0) return
   ctx.fillStyle = 'rgba(0,0,0,0.18)'
   ctx.beginPath(); ctx.ellipse(at.x, at.y, kit.w * s * 0.5, 2.5 * s, 0, 0, Math.PI * 2); ctx.fill()
-  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
-  kit.draw(painter(at.x - (kit.w * s) / 2, at.y - kit.h * s, s), Math.min(1, pet.t / pet.until), now)
-  ctx.filter = 'none'
+  kit.draw(painter(at.x - (kit.w * s) / 2, at.y - kit.h * s, s, bgPhase === 'night'), Math.min(1, pet.t / pet.until), now)
 }
 
 function drawEffects () {
@@ -592,7 +645,7 @@ function drawEffects () {
       ctx.fillStyle = 'rgba(245,245,240,0.9)'
       ctx.fillRect(Math.round(e.x - r), Math.round(e.y - r), Math.round(r * 2), Math.round(r * 2))
     } else if (e.kind === 'heart') {
-      drawMap(painter(e.x - 2.5 * SCALE + Math.sin(e.t / 150) * 3, e.y - 2.5 * SCALE), HEART, HEART_PAL)
+      blit(sprite('heart', HEART, HEART_PAL), e.x - 2.5 * SCALE + Math.sin(e.t / 150) * 3, e.y - 2.5 * SCALE)
     } else drawLetter(e.x - 6, e.y + Math.sin(e.t / 120) * 2)
   }
   ctx.globalAlpha = 1
@@ -602,9 +655,8 @@ function drawEffects () {
 // Click a berry (or anywhere on the leaves) to pick one, then click a Pokémon — or drag it
 // straight there. Let go anywhere else and it hops back onto its branch. Eaten ones regrow.
 const BERRIES = {
-  oran: { name: 'Oran Berry', body: '#4a7fd6', light: '#b5d0ff', dark: '#2c4f96' },
-  pecha: { name: 'Pecha Berry', body: '#f29bbd', light: '#ffe0ec', dark: '#c4628a' },
   cheri: { name: 'Cheri Berry', body: '#e0483e', light: '#ffa79a', dark: '#9c2b25' },
+  persim: { name: 'Persim Berry', body: '#f0882e', light: '#ffcf96', dark: '#b2581a' },
   sitrus: { name: 'Sitrus Berry', body: '#f2cf3c', light: '#fff5bf', dark: '#b88f1e' }
 }
 const BERRY = ['...sl..', '..ooo..', '.obbbo.', 'obwbbbo', 'obbbbbo', 'obbbbdo', '.obddo.', '..ooo..']
@@ -634,9 +686,11 @@ function slotPos (s) {
   return { x: tree.x + (s.ax + 0.5 - TREE_W / 2) * SCALE, y: tree.y + (s.ay + 0.5 - TREE_H) * SCALE }
 }
 
-function drawBerry (x, y, type, s = SCALE) {
+// a berry centred on (x, y); `night` dims it like the rest of the field
+function drawBerry (x, y, type, s = SCALE, night = false) {
   const b = BERRIES[type]
-  drawMap(painter(x - 3.5 * s, y - 4.5 * s, s), BERRY, { s: '#3b6b2a', l: '#79c454', o: INK, b: b.body, w: b.light, d: b.dark })
+  const pal = { s: '#3b6b2a', l: '#79c454', o: INK, b: b.body, w: b.light, d: b.dark }
+  blit(sprite('berry:' + type, BERRY, pal, night), x - 3.5 * s, y - 4.5 * s, s)
 }
 
 // a round little tree in pixel art: puffs of leaves lit from the top left, on a stubby trunk
@@ -693,27 +747,26 @@ function drawTree (now, fade) {
   // the leaves rustle for a moment after a pick
   const k = (now - tree.shake) / 360
   const dx = k < 1 && !reduceMotion ? Math.round(Math.sin(k * Math.PI * 5) * 2 * (1 - k)) : 0
-  const blit = (img, alpha) => {
+  const leaves = (img, alpha) => {
     ctx.globalAlpha = alpha
     ctx.drawImage(img, 0, 0, TREE_W, CANOPY_H, ox + dx, oy, TREE_W * SCALE, CANOPY_H * SCALE)
     ctx.drawImage(img, 0, CANOPY_H, TREE_W, TREE_H - CANOPY_H, ox, oy + CANOPY_H * SCALE, TREE_W * SCALE, (TREE_H - CANOPY_H) * SCALE)
     ctx.globalAlpha = 1
   }
-  if (fade < 1 && tree.prev) blit(tree.prev, 1)
+  if (fade < 1 && tree.prev) leaves(tree.prev, 1)
   else tree.prev = null
-  blit(tree.img, fade)
-  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
+  leaves(tree.img, fade)
+  const night = bgPhase === 'night'
   for (const s of tree.slots) {
     const at = slotPos(s)
     if (s.state === 'ripe') {
       const grow = easeOut(Math.min(1, (now - s.born) / 400)) // regrown ones pop in
-      if (grow > 0) drawBerry(at.x + dx, at.y, s.type, SCALE * grow)
+      if (grow > 0) drawBerry(at.x + dx, at.y, s.type, SCALE * grow, night)
     } else if (s.state === 'back') {
       const t = easeOut(Math.min(1, (now - s.born) / 300))
-      drawBerry(lerp(s.bx, at.x, t), lerp(s.by, at.y, t) - Math.sin(t * Math.PI) * 18, s.type)
+      drawBerry(lerp(s.bx, at.x, t), lerp(s.by, at.y, t) - Math.sin(t * Math.PI) * 18, s.type, SCALE, night)
     }
   }
-  ctx.filter = 'none'
 }
 
 function updateTree (now) {
@@ -809,9 +862,7 @@ function drawSnack (pet) {
   const s = pet.snack, m = mouthAt(pet)
   const left = 3 - Math.min(3, Math.floor((s.t / s.dur) * 3)) // bites left
   if (!left) return
-  if (bgPhase === 'night') ctx.filter = 'brightness(0.75)'
-  drawBerry(m.x, m.y, s.type, SCALE * (0.4 + 0.2 * left))
-  ctx.filter = 'none'
+  drawBerry(m.x, m.y, s.type, SCALE * (0.4 + 0.2 * left), bgPhase === 'night')
 }
 
 function hearts (pet, n) {
@@ -825,21 +876,21 @@ function hearts (pet, n) {
 // A press that starts to rub turns into petting: a hand pats the head in time with the rubbing
 // ("pet pet"), the Pokémon squashes under it and hearts float up. A press that doesn't move
 // is still a plain click (say hi).
+// a flat hand, palm down, reaching in from the left in a trainer's red-and-white cuff:
+// it lies across the top of the head and pats, fingertips curled over
 const HAND = [
-  '...oooooooo..',
-  '...obbbbbbo..',
-  '...oBBBBBBo..',
-  '..oossssssoo.',
-  '.osssssssssso',
-  'osssossssssso',
-  'osssossssssso',
-  '.ooosssssssso',
-  '...oshshshsso',
-  '...oshshshso.',
-  '...oshshshso.',
-  '....ooooooo..'
+  '.ooo.....ooo.........',
+  'ocCwooooollloo.......',
+  'ocCwllllllllllooooo..',
+  'ocCwsssssssssslllllo.',
+  'ocCwsssssssssssdddddo',
+  'ocCwsssssssssssssssso',
+  'ocCwdddddddddddoooodo',
+  'ocCwdddddddddddddddo.',
+  '.oooooddddoooooooddo.',
+  '......ooddo......oo..'
 ]
-const HAND_PAL = { o: INK, b: '#5b8fd6', B: '#3d6db0', s: '#fbe3c8', h: '#e8bf98' }
+const HAND_PAL = { o: '#4a2c22', c: '#ef6a5b', C: '#c4433a', w: '#f7f2e8', l: '#ffe6cf', s: '#f6cfa8', d: '#d99a72' }
 let press = null // pointer down on a Pokémon: { pet, x0, y0, x, y, travel, rubbing, phase, pats }
 
 const isPetted = (p) => !!press && press.rubbing && press.pet === p
@@ -881,8 +932,8 @@ function drawPetting () {
   const head = p.y - (p.mon.feet - p.anim().head) * SCALE * (1 - sq * 0.14)
   const span = Math.min(p.rect().w * 0.2, 14) // the hand slides across the head with the rubbing
   const hx = Math.min(Math.max(press.x, p.x - span), p.x + span)
-  // fingertips on the head as a pat lands, lifted a little in between
-  drawMap(painter(hx - 6.5 * SCALE, head - (10 + (1 - sq) * 2) * SCALE), HAND, HAND_PAL)
+  // the palm on the head as a pat lands, lifted a little in between
+  blit(sprite('hand', HAND, HAND_PAL), hx - 11 * SCALE, head - (7 + (1 - sq) * 2) * SCALE)
 }
 
 // ---------- scenery (cached, redrawn on resize or when the time of day changes) ----------
@@ -986,50 +1037,181 @@ function resize () {
   tree.x = Math.round(Math.min(Math.max(46, W * 0.17), 110))
   tree.y = groundTop + 12
   bgPhase = phaseNow()
-  bg = buildBackground(bgPhase)
+  showScenery(false)
   tree.img = buildTree(bgPhase)
-  prevBg = tree.prev = null // a resize redraws the sky at the new size; nothing to fade from
+  tree.prev = null // a resize redraws the sky at the new size; nothing to fade from
   for (const p of pets) {
     p.x = Math.min(Math.max(p.x, 24), Math.max(24, W - 24))
     p.y = Math.min(Math.max(p.y, groundTop + 30), H - 12)
   }
+  wake()
 }
 
+// The scenery is a canvas of its own under the sprites, so frames only redraw what moves.
+// A new time of day fades in on top of the old one (a CSS transition), then the old one goes.
+function showScenery (fade) {
+  const next = buildBackground(bgPhase)
+  next.className = 'scenery'
+  const old = scenery
+  scenery = next
+  if (fade) {
+    next.style.opacity = '0'
+    next.style.transition = `opacity ${SKY_FADE_MS}ms ease`
+  }
+  canvas.before(next) // above the old one, under the sprites
+  if (!old) return
+  if (!fade) return old.remove()
+  next.getBoundingClientRect() // start the transition from 0
+  next.style.opacity = '1'
+  setTimeout(() => old.remove(), SKY_FADE_MS + 100)
+}
+
+// ---------- party: add, remove, reset, swap ----------
+const pickSelect = document.getElementById('pick')
+
 function spawn (key) {
-  if (!mons[key]) return
-  if (pets.length >= MAX_PETS) pets.shift()
+  if (!mons[key] || pets.length >= MAX_PETS) return
   const p = new Pet(mons[key], rand(30, Math.max(31, W - 30)), rand(groundTop + 34, H - 14))
   pets.push(p)
-  updateCount()
+  updateControls()
+  wake()
   return p
 }
 
-function updateCount () {
-  document.getElementById('count').textContent = `· ${pets.length}`
+// whoever − takes off the field: the kind picked in the list (the one that came last), or else the last to come
+function removalTarget () {
+  return pets.findLast((p) => p.mon.key === pickSelect.value) || pets[pets.length - 1]
+}
+
+function forget (pet) {
+  if (press?.pet === pet) press = null
+  if (aim === pet) aim = null
+}
+
+function removePet (pet) {
+  const i = pets.indexOf(pet)
+  if (i < 0) return
+  pets.splice(i, 1)
+  forget(pet)
+  puff(pet.x, pet.y - 10)
+  updateControls()
+  wake()
+}
+
+// swap one Pokémon, on the same spot, for a kind that isn't on the field yet
+function swapPet (pet) {
+  const i = pets.indexOf(pet)
+  if (i < 0) return
+  const onField = new Set(pets.map((p) => p.mon.key))
+  const fresh = Object.keys(mons).filter((k) => !onField.has(k))
+  const next = new Pet(mons[pick(fresh.length ? fresh : Object.keys(mons))], pet.x, pet.y)
+  next.bubble = 1800 // says its name
+  pets[i] = next
+  forget(pet)
+  puff(pet.x, pet.y - 10)
+  updateControls()
+  wake()
 }
 
 function defaultParty () {
   pets = []
   const others = Object.keys(mons).filter((k) => k !== 'pikachu').sort(() => Math.random() - 0.5)
-  for (const key of ['pikachu', ...others.slice(0, 3)]) spawn(key)
+  for (const key of ['pikachu', ...others.slice(0, MAX_PETS - 1)]) spawn(key)
 }
 
-let last = performance.now(), acc = 0
+function updateControls () {
+  document.getElementById('count').textContent = `· ${pets.length}/${MAX_PETS}`
+  const add = document.getElementById('add'), remove = document.getElementById('remove')
+  const full = pets.length >= MAX_PETS
+  add.disabled = full
+  add.title = full ? `The field is full (${MAX_PETS} at most): remove or swap one first` : `Add ${mons[pickSelect.value]?.name || 'a Pokémon'}`
+  const target = removalTarget()
+  remove.disabled = !target
+  remove.title = target ? `Remove ${target.mon.name}` : 'No Pokémon on the field'
+}
+
+// ↺ opens a small menu: reset the whole party, or swap just one Pokémon
+const menu = document.getElementById('menu')
+const resetButton = document.getElementById('reset')
+
+function openMenu () {
+  const item = (label, title, onPick) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.setAttribute('role', 'menuitem')
+    b.textContent = label
+    b.title = title
+    b.addEventListener('click', () => { closeMenu(); onPick() })
+    menu.appendChild(b)
+  }
+  menu.replaceChildren()
+  item('Reset all', 'A new starting party', defaultParty)
+  if (pets.length) {
+    const label = document.createElement('div')
+    label.className = 'label'
+    label.textContent = 'Swap one for a new Pokémon'
+    menu.appendChild(label)
+    const seen = {}
+    for (const p of pets) {
+      const n = (seen[p.mon.key] = (seen[p.mon.key] || 0) + 1)
+      const name = n > 1 ? `${p.mon.name} (${n})` : p.mon.name
+      item(name, `Swap ${name} for a Pokémon that isn't on the field`, () => swapPet(p))
+    }
+  }
+  const bar = document.getElementById('bar')
+  menu.style.right = `${bar.clientWidth - resetButton.offsetLeft - resetButton.offsetWidth}px`
+  menu.hidden = false
+  resetButton.setAttribute('aria-expanded', 'true')
+  menu.querySelector('button').focus()
+}
+
+function closeMenu () {
+  menu.hidden = true
+  resetButton.setAttribute('aria-expanded', 'false')
+}
+
+// ---------- loop ----------
+// Between frames the panel waits on a timer instead of waking on every display refresh, at
+// the rate frameRate() picks; while hidden it doesn't run at all.
+let last = performance.now(), timer = 0, frame = 0, nextAt = 0
+
+function frameRate (now) {
+  if (held || press || effects.length || tree.prev || now - tree.shake < 400) return FPS.busy
+  if (tree.slots.some((s) => s.state === 'back' || now - s.born < 400)) return FPS.busy
+  let asleep = true
+  for (const p of pets) {
+    if (p.snack || p.state === 'walk' || p.state === 'goto' || p.state === 'hop') return FPS.busy
+    if (p.state === 'work' && p.job.type === 'deploy') return FPS.busy // the letter bobs overhead
+    if (p.state !== 'sleep') asleep = false
+  }
+  return asleep ? FPS.asleep : FPS.calm
+}
+
+// draw a frame right away if the loop is waiting longer than a busy frame (input, a button)
+function wake () {
+  if (frame || document.hidden || nextAt - performance.now() <= 1000 / FPS.busy) return
+  clearTimeout(timer)
+  frame = requestAnimationFrame(loop)
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || frame) return
+  clearTimeout(timer)
+  last = performance.now()
+  frame = requestAnimationFrame(loop)
+})
+
 function loop (now) {
-  requestAnimationFrame(loop)
-  if (document.hidden) { last = now; return }
-  const dt = Math.min(100, now - last)
-  acc += dt
+  frame = 0
+  if (document.hidden) return // visibilitychange starts it again
+  const start = performance.now() // the frame's timestamp can lag behind the callback
+  const step = Math.min(200, now - last)
   last = now
-  if (acc < 1000 / FPS) return
-  const step = acc
-  acc = 0
   if (phaseNow() !== bgPhase) {
-    prevBg = bg
     tree.prev = tree.img
     fadeStart = now
     bgPhase = phaseNow()
-    bg = buildBackground(bgPhase)
+    showScenery(true)
     tree.img = buildTree(bgPhase)
   }
   director(now)
@@ -1038,14 +1220,16 @@ function loop (now) {
   aim = held ? petAt(held.x, held.y) || null : null
   for (const p of pets) p.update(step)
   updateWork(now, step)
+  draw(now, step)
+  nextAt = start + 1000 / frameRate(now)
+  // wake a little early: the frame itself then lands on the next display refresh
+  timer = setTimeout(() => { frame = requestAnimationFrame(loop) }, Math.max(0, nextAt - performance.now() - 4))
+}
+
+function draw (now, step) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, canvas.width, canvas.height)
-  const fade = prevBg ? Math.min(1, (now - fadeStart) / SKY_FADE_MS) : 1
-  if (fade < 1) ctx.drawImage(prevBg, 0, 0)
-  else prevBg = null
-  ctx.globalAlpha = fade
-  if (bg) ctx.drawImage(bg, 0, 0)
-  ctx.globalAlpha = 1
+  const fade = tree.prev ? Math.min(1, (now - fadeStart) / SKY_FADE_MS) : 1
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.imageSmoothingEnabled = false
   drawClouds(step)
@@ -1095,6 +1279,7 @@ function greet (pet) {
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || press) return
   const { x, y } = pointerAt(e)
+  wake()
   if (held) return dropBerry(x, y) // the second click of click-to-carry
   const t = targetAt(x, y)
   if (!t.slot && !t.pet) return
@@ -1120,6 +1305,7 @@ canvas.addEventListener('pointermove', (e) => {
 })
 canvas.addEventListener('pointerup', (e) => {
   const { x, y } = pointerAt(e)
+  wake()
   if (held?.drag) {
     held.drag = false
     if (held.moved > 12) dropBerry(x, y) // dragged somewhere; a plain click keeps carrying it
@@ -1158,16 +1344,25 @@ async function init () {
   select.value = 'pikachu'
   resize()
   defaultParty()
+  select.addEventListener('change', updateControls)
   document.getElementById('add').addEventListener('click', () => spawn(select.value))
-  document.getElementById('reset').addEventListener('click', defaultParty)
+  document.getElementById('remove').addEventListener('click', () => removePet(removalTarget()))
+  resetButton.addEventListener('click', () => (menu.hidden ? openMenu() : closeMenu()))
+  document.addEventListener('pointerdown', (e) => {
+    if (!menu.hidden && !menu.contains(e.target) && !resetButton.contains(e.target)) closeMenu()
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menu.hidden) { closeMenu(); resetButton.focus() }
+  })
   renderSkyButton()
   document.getElementById('sky').addEventListener('click', () => {
     skyMode = SKY_MODES[(SKY_MODES.indexOf(skyMode) + 1) % SKY_MODES.length]
     renderSkyButton()
     applySky()
+    wake()
   })
   new ResizeObserver(resize).observe(canvas)
-  requestAnimationFrame(loop)
+  frame = requestAnimationFrame(loop)
 }
 
 init()

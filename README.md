@@ -12,10 +12,11 @@ A Pokémon pack for [Orca](https://github.com/stablyai/orca): a **Pokémon Pets*
 - They stroll, stop, look around, and doze off — at night the sky turns dark, stars come out and most of them fall asleep (Snorlax mostly sleeps anyway).
 - They work, too: every so often whoever is around picks up a job, trots to an open patch of grass and pulls out its own kit — a little PC for coding, the Pokédex to research another Pokémon, a pocket Pokémon Center machine for tests, an anvil to build a Poké Ball, or a letter it sends flying to ship the release. Any Pokémon can take any job, and the team loosely follows a code → test → build → deploy flow.
 - The sky follows your clock (day, dusk, night), or force one with the sky button — it cycles Auto → Day → Dusk → Night, and the Pokémon react right away.
-- A berry tree stands at the back of the field. Click a berry (or drag it) to pick it, then bring it to a Pokémon: it turns to you and munches it in three bites, then hops happily. Let go anywhere else and the berry hops back onto its branch; eaten ones regrow, and the tree never shows more than two of one color. Food wakes up sleepers, and a worker takes a quick snack break.
-- Press on a Pokémon and rub to pet it: a hand pats its head in time with your rubbing, it squashes under each pat and hearts float up.
-- Click a Pokémon to make it hop and show its name (or, while it works, what it's working on). Add more with **+** (up to 10), reset with **↺**.
-- Lightweight: a single sandboxed HTML document, capped at 30 fps, paused while hidden; respects `prefers-reduced-motion`.
+- A berry tree stands at the back of the field, with red Cheri, orange Persim and yellow Sitrus berries. Click a berry (or drag it) to pick it, then bring it to a Pokémon: it turns to you and munches it in three bites, then hops happily. Let go anywhere else and the berry hops back onto its branch; eaten ones regrow, and the tree never shows more than two of one color. Food wakes up sleepers, and a worker takes a quick snack break.
+- Press on a Pokémon and rub to pet it: a flat hand in a trainer's cuff lies across its head and pats in time with your rubbing, it squashes under each pat and hearts float up.
+- Click a Pokémon to make it hop and show its name (or, while it works, what it's working on).
+- Up to 4 on the field. **+** adds the Pokémon picked in the list; **−** takes it off the field (or, if it isn't there, the last one that came). **↺** opens a menu: **Reset all** for a new starting party, or pick one Pokémon to swap it for a kind that isn't on the field yet.
+- Lightweight: a single sandboxed HTML document (about 350 KB). It draws at 30 fps only while something moves, 15 while everyone idles or works in place and 8 once they're all asleep, and stops while hidden. The scenery sits on its own layer, so frames only redraw what moves; respects `prefers-reduced-motion`.
 
 ### Install
 
@@ -38,7 +39,7 @@ The panel is one self-contained HTML file (Orca panels may only load inline scri
 python3 plugin-src/build.py
 ```
 
-This reads `plugin-src/panel.template.html` and `plugin-src/sprites/`, and writes `plugin/pokemon-pets/`. To add a Pokémon, drop its sheets from the PMD Sprite Repository into `plugin-src/sprites/<dex number>/` and add it to `ROSTER` in `build.py`.
+This reads `plugin-src/panel.template.html` and `plugin-src/sprites/`, and writes `plugin/pokemon-pets/`. To add a Pokémon, drop its sheets from the PMD Sprite Repository into `plugin-src/sprites/<dex number>/` and add it to `ROSTER` in `build.py`. The panel only shows hops and meals facing you, so the build keeps just the front-facing row of those sheets.
 
 ## Credits
 
