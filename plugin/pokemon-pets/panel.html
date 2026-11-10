@@ -1,47 +1,59 @@
 <style>
+  /* Orca's theme colors. Orca 1.4.255+ hands them to panels as --orca-*, earlier builds used the
+     bare names; the last value is for a page with no theme at all. */
+  :root {
+    --pk-background: var(--orca-background, var(--background, #18181b));
+    --pk-foreground: var(--orca-foreground, var(--foreground, #fafafa));
+    --pk-secondary: var(--orca-secondary, var(--secondary, var(--orca-muted, var(--muted, #27272a))));
+    --pk-accent: var(--orca-accent, var(--accent, #3f3f46));
+    --pk-border: var(--orca-border, var(--border, #3f3f46));
+    --pk-muted-foreground: var(--orca-muted-foreground, var(--muted-foreground, #a1a1aa));
+    --pk-popover: var(--orca-popover, var(--popover, #18181b));
+    --pk-popover-foreground: var(--orca-popover-foreground, var(--popover-foreground, #fafafa));
+  }
   html, body { margin: 0; height: 100%; overflow: hidden; }
   body {
-    background: var(--background);
-    color: var(--foreground);
+    background: var(--pk-background);
+    color: var(--pk-foreground);
     font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Geist", system-ui, sans-serif;
     user-select: none;
   }
   .bar {
     position: absolute; inset: 0 0 auto 0; height: 36px; box-sizing: border-box;
     display: flex; align-items: center; gap: 6px; padding: 0 8px;
-    border-bottom: 1px solid var(--border); background: var(--background);
+    border-bottom: 1px solid var(--pk-border); background: var(--pk-background);
   }
   .title { font-weight: 600; white-space: nowrap; }
-  .count { color: var(--muted-foreground); font-weight: 400; margin-left: 4px; }
+  .count { color: var(--pk-muted-foreground); font-weight: 400; margin-left: 4px; }
   select, button {
-    font: inherit; color: var(--foreground); background: var(--secondary, var(--muted));
-    border: 1px solid var(--border); border-radius: 6px; height: 24px; padding: 0 8px;
+    font: inherit; color: var(--pk-foreground); background: var(--pk-secondary);
+    border: 1px solid var(--pk-border); border-radius: 6px; height: 24px; padding: 0 8px;
   }
   select { flex: 1 1 auto; min-width: 0; max-width: 140px; }
   #remove { margin-left: auto; } /* − on the left of the list, + on its right */
   .icon { width: 24px; padding: 0; flex: none; font-size: 14px; line-height: 1; }
   button { cursor: pointer; transition: background-color .15s ease; }
-  button:hover, select:hover { background: var(--accent); }
-  button:disabled { opacity: .4; cursor: default; background: var(--secondary, var(--muted)); }
-  .info { color: var(--muted-foreground); font-size: 12px; }
+  button:hover, select:hover { background: var(--pk-accent); }
+  button:disabled { opacity: .4; cursor: default; background: var(--pk-secondary); }
+  .info { color: var(--pk-muted-foreground); font-size: 12px; }
   .icon svg { width: 14px; height: 14px; display: block; margin: auto; }
   /* sky forced to a fixed time: framed, so it's clear it isn't following the clock */
-  .icon.forced { border-color: var(--muted-foreground); }
+  .icon.forced { border-color: var(--pk-muted-foreground); }
   #c, .scenery { position: absolute; inset: 36px 0 0 0; width: 100%; height: calc(100% - 36px); display: block; }
   #c { image-rendering: pixelated; cursor: default; touch-action: none; }
   .scenery { pointer-events: none; }
   .menu {
     position: absolute; top: 33px; z-index: 1; min-width: 168px; padding: 4px; box-sizing: border-box;
-    background: var(--popover, var(--background)); color: var(--popover-foreground, var(--foreground));
-    border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+    background: var(--pk-popover); color: var(--pk-popover-foreground);
+    border: 1px solid var(--pk-border); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .3);
   }
   .menu[hidden] { display: none; }
   .menu button {
     display: block; width: 100%; height: 26px; padding: 0 8px; text-align: left;
     background: transparent; border: 0; border-radius: 5px;
   }
-  .menu button:hover, .menu button:focus-visible { background: var(--accent); outline: none; }
-  .menu .label { padding: 6px 8px 2px; color: var(--muted-foreground); font-size: 11px; }
+  .menu button:hover, .menu button:focus-visible { background: var(--pk-accent); outline: none; }
+  .menu .label { padding: 6px 8px 2px; color: var(--pk-muted-foreground); font-size: 11px; }
 </style>
 
 <div class="bar" id="bar">
@@ -83,10 +95,10 @@ const css = (name, fallback) => getComputedStyle(document.documentElement).getPr
 let TOK = {}
 function readTokens () {
   TOK = {
-    muted: css('--muted-foreground', '#a1a1aa'),
-    popover: css('--popover', '#18181b'),
-    popoverFg: css('--popover-foreground', '#fafafa'),
-    border: css('--border', '#3f3f46')
+    muted: css('--pk-muted-foreground', '#a1a1aa'),
+    popover: css('--pk-popover', '#18181b'),
+    popoverFg: css('--pk-popover-foreground', '#fafafa'),
+    border: css('--pk-border', '#3f3f46')
   }
 }
 
@@ -1362,6 +1374,12 @@ async function init () {
     wake()
   })
   new ResizeObserver(resize).observe(canvas)
+  // a theme change rewrites Orca's token style and the html light/dark class: re-read the
+  // colors the canvas draws with (speech bubbles, zzz)
+  const retheme = () => { readTokens(); wake() }
+  new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+  const tokens = document.getElementById('orca-design-tokens')
+  if (tokens) new MutationObserver(retheme).observe(tokens, { childList: true, characterData: true, subtree: true })
   frame = requestAnimationFrame(loop)
 }
 

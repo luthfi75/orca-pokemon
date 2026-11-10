@@ -40,7 +40,7 @@ MANIFEST = {
     "id": "pokemon-pets",
     "publisher": "luthfi",
     "name": "Pokémon Pets",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "description": "Pokémon wander around an Orca sidebar panel and every so often get to work, each with its own kit: a little PC for coding, the Pokédex for research, a Pokémon Center machine for tests, an anvil for builds and a letter for deploys. Pick a berry from the tree and bring it to a Pokémon to feed it; press and rub one to pet it. Click one to say hi; at night they sleep.",
     "author": {"name": "Luthfi"},
     "engines": {"orca": ">=1.4.0"},
